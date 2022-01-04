@@ -192,7 +192,7 @@ class RelativeObservation(gym.ObservationWrapper):
             i += 1
             if i >= 10:
                 break
-        
+
         state = np.expand_dims(state, axis=1)
         return state
 
@@ -219,7 +219,7 @@ class RelativeObservation(gym.ObservationWrapper):
 class Game(gym.Wrapper):
     def __init__(self, env: Env, skip_frames: int = 5):
         super().__init__(env)
-        self.env = NoopResetEnv(self.env, noop_max=30)
+        self.env = NoopResetEnv(self.env, noop_max=130)
         self.env = MaxAndSkipEnv(self.env, skip=skip_frames)
         # self.env = EpisodicLifeEnv(self.env)
         # self.env = ClipRewardEnv(self.env)
@@ -238,8 +238,8 @@ class Game(gym.Wrapper):
                 for i in range(0, 6)
             ],
         )
-        #self.env = FrameStack(self.env, skip_frames)
-        #self.env = FlattenObservation(self.env)
+        # self.env = FrameStack(self.env, skip_frames)
+        # self.env = FlattenObservation(self.env)
         self.observation_space = self.env.observation_space
 
 

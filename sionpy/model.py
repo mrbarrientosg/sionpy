@@ -3,225 +3,202 @@ from pytorch_lightning import LightningModule
 from gym import Env
 from torch.functional import Tensor
 from torch.utils.data.dataloader import DataLoader
-from sionpy.agent import ActorCriticAgent
+from sionpy.experience import ExperienceSourceDataset
+from sionpy.mcts import MCTS, Node
 
-from sionpy.network import MlpNetwork
-from sionpy.replay_buffer import ExperienceSourceDataset, ReplayBuffer
+from sionpy.network import SionNetwork
+from sionpy.replay_buffer import GameHistory, ReplayBuffer, SimpleBatch
 import numpy as np
 import torch
 from torch import Tensor, optim
 from torch.optim.optimizer import Optimizer
+from torch.functional import F
 
 
 class A2C(LightningModule):
     def __init__(
         self,
         env: Env,
-        gamma: float = 0.99,
+        observation_shape: Tuple,
+        action_space: List,
         lr: float = 1e-3,
-        batch_size: int = 512,
-        steps_per_epoch: int = 2048,
-        entropy_beta: float = 0.01,
-        critic_beta: float = 0.5,
-        max_episode_len: int = 1024,
+        batch_size: int = 16,
+        encoding_size: int = 30,
+        max_moves: int = 2500,
+        max_episodes: int = 10,
+        stacked_observations: int = 32,
+        window_size: int = 1e6,
+        num_unroll_steps: int = 5,
+        td_steps: int = 10,
+        discount: float = 0.997,
+        simulations: int = 30,
+        num_workers: int = 0,
         **kwargs,
     ):
         super().__init__()
-
-        self.save_hyperparameters(
-            ignore=["env", "batch_size", "steps_per_epoch", "max_episode_len"]
-        )
-        self.max_episode_len = max_episode_len
-        self.batch_size = batch_size
-        self.steps_per_epoch = steps_per_epoch
-
+        self.save_hyperparameters(ignore=["env"])
         self.env = env
-        self.net = MlpNetwork(
-            self.env.observation_space.shape, self.env.action_space.n, 32, 30
+        self.net = SionNetwork(
+            observation_shape, len(action_space), stacked_observations, encoding_size
         )
-        self.agent = ActorCriticAgent()
-        self.buffer = ReplayBuffer()
+        self.buffer = ReplayBuffer(window_size)
 
-        self.ep_rewards = []
-        self.ep_values = []
-        self.epoch_rewards = []
+    def loss(self, batch: SimpleBatch) -> Tensor:
+        policy_logits, value, hidden_state, reward = self.net.initial_inference(
+            batch.observation_batch
+        )
 
-        self.episode_step = 0
-        self.avg_ep_reward = 0
-        self.avg_ep_len = 0
-        self.avg_reward = 0
+        predictions = [(value, reward, policy_logits)]
 
-        self.eps = np.finfo(np.float32).eps.item()
+        for i in range(1, batch.action_batch.shape[1]):
+            policy_logits, value, hidden_state, reward = self.net.recurrent_inference(
+                hidden_state, batch.action_batch[:, i]
+            )
+            predictions.append((value, reward, policy_logits))
 
-        self.state = self.env.reset()
+        value_loss, reward_loss, policy_loss = (0, 0, 0)
+        value, reward, policy_logits = predictions[0]
 
-    def forward(self, x) -> Tuple[Tensor, Tensor]:
-        if not isinstance(x, Tensor):
-            x = torch.tensor(x, device=self.device, dtype=torch.float)
-        
-        x = x.unsqueeze(0)
-        logprobs, values, hidden_state = self.net.initial_inference(x)
-        action = self.agent(logprobs)
-        return action, logprobs, values
+        current_value_loss, _, current_policy_loss = self.loss_function(
+            value.squeeze(-1),
+            reward.squeeze(-1),
+            policy_logits,
+            batch.target_value[:, 0],
+            batch.target_reward[:, 0],
+            batch.target_policy[:, 0],
+        )
+        value_loss += current_value_loss
+        policy_loss += current_policy_loss
 
-    def train_batch(self) -> Iterator[Tuple[np.ndarray, int, Tensor]]:
-        self.buffer.states.append(self.state)
-        self.buffer.actions.append(0)
-        for step in range(self.steps_per_epoch):
-            observation = self.buffer.get_stacked_observations(-1, 32)
-            with torch.no_grad():
-                action, _, value = self.forward(observation)
-                action = action[0]
+        for i in range(1, len(predictions)):
+            value, reward, policy_logits = predictions[i]
+            (
+                current_value_loss,
+                current_reward_loss,
+                current_policy_loss,
+            ) = self.loss_function(
+                value.squeeze(-1),
+                reward.squeeze(-1),
+                policy_logits,
+                batch.target_value[:, i],
+                batch.target_reward[:, i],
+                batch.target_policy[:, i],
+            )
 
-            next_state, reward, done, _ = self.env.step(action)
+            value_loss += current_value_loss
+            reward_loss += current_reward_loss
+            policy_loss += current_policy_loss
 
-            self.episode_step += 1
+        loss = value_loss * 0.25 + reward_loss + policy_loss
+        loss = loss.mean()
 
-            self.buffer.add(self.state, action, reward, done)
-            self.state = next_state
+        return (loss, value_loss, reward_loss, policy_loss)
 
-            self.ep_rewards.append(reward)
-            self.ep_values.append(value.detach())
+    def loss_function(
+        self, value, reward, policy_logits, target_value, target_reward, target_policy,
+    ):
+        # Cross-entropy seems to have a better convergence than MSE
+        value_loss = F.cross_entropy(
+            value.unsqueeze(0), target_value.unsqueeze(0)
+        ).sum()
+        reward_loss = F.cross_entropy(
+            reward.unsqueeze(0), target_reward.unsqueeze(0)
+        ).sum()
+        policy_loss = F.cross_entropy(
+            policy_logits.unsqueeze(0), target_policy.unsqueeze(0)
+        ).sum()
+        return value_loss, reward_loss, policy_loss
 
-            epoch_end = step == (self.steps_per_epoch - 1)
-            terminal = len(self.ep_rewards) == self.max_episode_len
-            over = done or terminal
+    def training_step(self, batch: SimpleBatch, batch_idx: int):
+        loss, value_loss, reward_loss, policy_loss = self.loss(batch)
 
-            if epoch_end or over:
-                if terminal or epoch_end:
-                    observation = self.buffer.get_stacked_observations(-1, 32)
-                    with torch.no_grad():
-                        _, _, value = self.forward(observation)
-                        last_value = value.detach()
-                        steps_before_cutoff = self.episode_step
-                else:
-                    last_value = 0
-                    steps_before_cutoff = 0
-
-                self.state = self.env.reset()
-                self.epoch_rewards.append(sum(self.ep_rewards))
-                # reset params
-                self.ep_rewards.clear()
-                self.ep_values.clear()
-                self.episode_step = 0
-
-            if epoch_end:
-                returns = self.buffer.compute_returns(last_value, self.hparams.gamma)
-
-                train_data = zip(self.buffer.states, self.buffer.actions, returns)
-
-                for state, action, _return in train_data:
-                    yield self.buffer.get_stacked_observations(-1, 32), action, _return
-
-                self.buffer.reset()
-                self.buffer.states.append(self.state)
-                self.buffer.actions.append(0)
-                
-                self.avg_reward = sum(self.epoch_rewards) / self.steps_per_epoch
-
-                # if epoch ended abruptly, exlude last cut-short episode to prevent stats skewness
-                epoch_rewards = self.epoch_rewards
-                if not done:
-                    epoch_rewards = epoch_rewards[:-1]
-
-                total_epoch_reward = sum(epoch_rewards)
-                nb_episodes = len(epoch_rewards)
-
-                if nb_episodes != 0:
-                    self.avg_ep_reward = total_epoch_reward / nb_episodes
-                    self.avg_ep_len = (
-                        self.steps_per_epoch - steps_before_cutoff
-                    ) / nb_episodes
-                else:
-                    self.avg_ep_reward = 0.0
-                    self.avg_ep_len = 0.0
-
-                self.epoch_rewards.clear()
-
-
-    def loss(self, states: Tensor, actions: Tensor, returns: Tensor,) -> Tensor:
-        """Calculates the loss for A2C which is a weighted sum of actor loss (MSE), critic loss (PG), and entropy
-        (for exploration)
-        Args:
-            states: tensor of shape (batch_size, state dimension)
-            actions: tensor of shape (batch_size, )
-            returns: tensor of shape (batch_size, )
-        """
-
-        logprobs, values, _ = self.net.initial_inference(states)
-
-        # calculates (normalized) advantage
-        with torch.no_grad():
-            # critic is trained with normalized returns, so we need to scale the values here
-            advs = returns - values * returns.std() + returns.mean()
-            # normalize advantages to train actor
-            advs = (advs - advs.mean()) / (advs.std() + self.eps)
-            # normalize returns to train critic
-            targets = (returns - returns.mean()) / (returns.std() + self.eps)
-
-        # entropy loss
-        entropy = -logprobs.exp() * logprobs
-        entropy = self.hparams.entropy_beta * entropy.sum(1).mean()
-
-        # actor loss
-        logprobs = logprobs[range(self.batch_size), actions]
-        actor_loss = -(logprobs * advs).mean()
-
-        # critic loss
-        critic_loss = self.hparams.critic_beta * torch.square(targets - values).mean()
-
-        # total loss (weighted sum)
-        total_loss = actor_loss + critic_loss - entropy
-
-        return total_loss
-
-    def training_step(
-        self, batch: Tuple[Tensor, Tensor], batch_idx: int
-    ) -> OrderedDict:
-        """Perform one actor-critic update using a batch of data.
-        Args:
-            batch: a batch of (states, actions, returns)
-        """
-        states, actions, returns = batch
-        loss = self.loss(states, actions, returns)
+        avg_reward, avg_mean_value, avg_length = self.buffer.get_statistic()
 
         self.log(
-            "avg_ep_len", self.avg_ep_len, prog_bar=True, on_step=False, on_epoch=True
+            "1.Total_reward/1.Avg_reward", avg_reward, on_step=False, on_epoch=True,
         )
         self.log(
-            "avg_ep_reward",
-            self.avg_ep_reward,
-            prog_bar=True,
+            "1.Total_reward/2.Avg_mean_value",
+            avg_mean_value,
             on_step=False,
             on_epoch=True,
         )
         self.log(
-            "avg_reward", self.avg_reward, prog_bar=True, on_step=False, on_epoch=True
+            "1.Total_reward/3.Avg_episode_length",
+            avg_length,
+            on_step=False,
+            on_epoch=True,
         )
-        self.log("loss", loss, prog_bar=False, on_step=False, on_epoch=True)
 
-        return OrderedDict({"loss": loss, "avg_reward": self.avg_reward})
+        self.log(
+            "2.Loss/1.Total_loss", loss, on_step=False, on_epoch=True,
+        )
+        self.log(
+            "2.Loss/2.Value_loss", value_loss, on_step=False, on_epoch=True,
+        )
+        self.log(
+            "2.Loss/3.Reward_loss", reward_loss, on_step=False, on_epoch=True,
+        )
+        self.log(
+            "2.Loss/4.Policy_loss", policy_loss, on_step=False, on_epoch=True,
+        )
+
+        self.log("avg_reward", avg_reward, logger=False, prog_bar=True)
+
+        self.log("loss", loss, logger=False)
+
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        loss = self.loss(batch)
+        return loss
 
     def configure_optimizers(self) -> List[Optimizer]:
         optimizer = optim.Adam(self.net.parameters(), lr=self.hparams.lr)
         return [optimizer]
 
-    def train_dataloader(self) -> DataLoader:
-        dataset = ExperienceSourceDataset(self.train_batch)
-        dataloader = DataLoader(dataset=dataset, batch_size=self.batch_size)
+    def test_dataloader(self):
+        dataset = ExperienceSourceDataset(
+            self.env, self.net, self.buffer, self.hparams, self.device, test=True
+        )
+        dataloader = DataLoader(
+            dataset=dataset,
+            batch_size=self.hparams.batch_size,
+            collate_fn=self.collate_wrapper,
+            num_workers=self.hparams.num_workers,
+            persistent_workers=True if self.hparams.num_workers >= 1 else False 
+        )
         return dataloader
 
-    def get_device(self, batch) -> str:
-        return batch[0][0][0].device.index if self.on_gpu else "cpu"
+    def train_dataloader(self) -> DataLoader:
+        dataset = ExperienceSourceDataset(
+            self.env, self.net, self.buffer, self.hparams, self.device
+        )
+        dataloader = DataLoader(
+            dataset=dataset,
+            batch_size=self.hparams.batch_size,
+            collate_fn=self.collate_wrapper,
+            num_workers=self.hparams.num_workers,
+            persistent_workers=True if self.hparams.num_workers >= 1 else False 
+        )
+        return dataloader
+
+    def collate_wrapper(self, batch):
+        return SimpleBatch(batch, self.device)
 
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = parent_parser.add_argument_group("A2C")
-        parser.add_argument("--gamma", type=float, default=0.99)
         parser.add_argument("--lr", type=float, default=1e-3)
-        parser.add_argument("--batch_size", type=int, default=512)
-        parser.add_argument("--steps_per_epoch", type=int, default=2048)
-        parser.add_argument("--entropy_beta", type=float, default=0.01)
-        parser.add_argument("--critic_beta", type=float, default=0.5)
-        parser.add_argument("--max_episode_len", type=int, default=256)
+        parser.add_argument("--batch_size", type=int, default=16)
+        parser.add_argument("--max_moves", type=int, default=2500)
+        parser.add_argument("--encoding_size", type=int, default=30)
+        parser.add_argument("--max_episodes", type=int, default=10)
+        parser.add_argument("--window_size", type=int, default=1e6)
+        parser.add_argument("--stacked_observations", type=int, default=32)
+        parser.add_argument("--num_unroll_steps", type=int, default=5)
+        parser.add_argument("--td_steps", type=int, default=10)
+        parser.add_argument("--discount", type=float, default=0.997)
+        parser.add_argument("--simulations", type=int, default=30)
+        parser.add_argument("--num_workers", type=int, default=0)
         return parent_parser
