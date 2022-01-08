@@ -22,7 +22,7 @@ class MaxAndSkipEnv(gym.Wrapper):
         )
         self._skip = skip
 
-    def step(self, action: int):
+    def step(self, action):
         """
         Step the environment with the given action
         Repeat action, sum reward, and max over last observations.
@@ -124,7 +124,7 @@ class EpisodicLifeEnv(gym.Wrapper):
         self.lives = 0
         self.was_real_done = True
 
-    def step(self, action: int):
+    def step(self, action):
         obs, reward, done, info = self.env.step(action)
         self.was_real_done = done
         # check current lives, make loss of life terminal,
@@ -144,14 +144,14 @@ class RelativeObservation(gym.ObservationWrapper):
         super().__init__(env)
         self.objects = objects
         self.num_envs = 1
-        self.observation_space = Box(low=-1, high=1, shape=(3, 1, 10), dtype=np.float32)
+        self.observation_space = Box(low=-1, high=1, shape=(1, 1, 30), dtype=np.float32)
 
     def observation(self, observation):
         gray = cv2.cvtColor(observation, cv2.COLOR_BGR2GRAY)
         objects = self.find_objects(gray)
 
         if len(objects["agent"]) == 0:
-            return np.zeros((3, 1, 10))
+            return np.zeros((1, 1, 30))
 
         for obj in objects:
             if obj == "agent":
@@ -193,7 +193,9 @@ class RelativeObservation(gym.ObservationWrapper):
             if i >= 10:
                 break
 
-        state = np.expand_dims(state, axis=1)
+        state = state.flatten()
+        state = np.expand_dims(state, axis=0)
+        state = np.expand_dims(state, axis=0)
         return state
 
     def find_objects(self, observation, threshold=0.95):
