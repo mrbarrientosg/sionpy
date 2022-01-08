@@ -12,6 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import os
 import datetime
+from argparse import ArgumentParser
 
 
 class A2C:
@@ -32,6 +33,7 @@ class A2C:
         scheduler_gamma: float = 0.95,
         device: str = "cuda",
         log_dir: str = None,
+        **kwargs,
     ):
         self.env = env
         self.device = torch.device(device)
@@ -305,3 +307,21 @@ class A2C:
 
         self.log.close()
 
+    @staticmethod
+    def add_model_specific_args(parent_parser: ArgumentParser):
+        parser = parent_parser.add_argument_group("A2C")
+        parser.add_argument("--stacked_observations", type=int, default=8)
+        parser.add_argument("--lr", type=float, default=0.1)
+        parser.add_argument("--epochs", type=int, default=1000)
+        parser.add_argument("--steps", type=int, default=1e6)
+        parser.add_argument("--batch_size", type=int, default=1024)
+        parser.add_argument("--rollout_steps", type=int, default=8192)
+        parser.add_argument("--max_episode", type=int, default=2500)
+        parser.add_argument("--epsilon_gamma", type=float, default=0.99)
+        parser.add_argument("--checkpoint_interval", type=int, default=500)
+        parser.add_argument("--vf_coef", type=float, default=0.5)
+        parser.add_argument("--hidden_nodes", type=int, default=128)
+        parser.add_argument("--scheduler_gamma", type=float, default=0.95)
+        parser.add_argument("--log_dir", type=str, default=None)
+        parser.add_argument("--device", type=str, default="cuda")
+        return parent_parser
