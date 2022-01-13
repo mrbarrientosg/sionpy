@@ -125,6 +125,8 @@ class ReplayBuffer:
         self.action_space = config.action_space
         self.num_played_games = initial_checkpoint["num_played_games"]
         self.num_played_steps = initial_checkpoint["num_played_steps"]
+        
+        np.random.seed(config.seed)
 
     def add(self, game_history: GameHistory, shared_storage: SharedStorage = None):
         if len(self.game_histories) > self.max_windows:
@@ -223,7 +225,7 @@ class ReplayBuffer:
             game_history.rewards[index + 1 : bootstrap_index + 1]
         ):
             # The value is oriented from the perspective of the current player
-            value += reward * self.gamma ** i
+            value += reward * (self.gamma ** i)
 
         return value
 

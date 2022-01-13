@@ -1,3 +1,4 @@
+from argparse import ArgumentParser
 import datetime
 import os
 import torch
@@ -7,18 +8,17 @@ class Config:
     def __init__(
         self,
         game_id: str,
-        stacked_observations: int = 8,
+        seed: int = 0,
+        stacked_observations: int = 32,
         lr: float = 0.005,
-        epochs: int = 1000,
         steps: int = 1e6,
         batch_size: int = 1024,
         encoding_size: int = 30,
         max_windows: int = 1e6,
         num_unroll_steps: int = 5,
         td_steps: int = 10,
-        max_episodes: int = 10,
         max_moves: int = 27000,
-        epsilon_gamma: float = 0.99,
+        epsilon_gamma: float = 0.997,
         checkpoint_interval: int = 500,
         vf_coef: float = 0.25,
         hidden_nodes: int = 128,
@@ -26,26 +26,31 @@ class Config:
         pb_c_base: float = 19652,
         pb_c_init: float = 1.25,
         simulations: int = 30,
-        device: str = "cuda",
+        device: str = "cpu",
+        gpus: int = 0,
+        num_workers: int = 1,
         log_dir: str = None,
         **kwargs,
     ):
         self.lr = lr
         self.lr_decay_rate = 0.1  # Set it to 1 to use a constant learning rate
         self.lr_decay_steps = 350e3
+
+        self.gpus = gpus
+        self.seed = seed
+        self.num_workers = num_workers
         self.device = torch.device(device)
         self.observation_shape = (1, 1, 30)
         self.stacked_observations = stacked_observations
-        self.epochs = epochs
         self.batch_size = batch_size
-        self.max_episodes = max_episodes
         self.steps = steps
         self.epsilon_gamma = epsilon_gamma
         self.vf_coef = vf_coef
         self.pb_c_init = pb_c_init
         self.pb_c_base = pb_c_base
         self.simulations = simulations
-        self.action_space = list(range(6))  # TODO: cambiar
+        self.action_space = list(range(6))
+
         self.max_moves = max_moves
         self.encoding_size = encoding_size
         self.max_windows = max_windows
@@ -77,3 +82,29 @@ class Config:
         else:
             return 0.25
 
+    @staticmethod
+    def add_model_specific_args(parent_parser: ArgumentParser):
+        parser = parent_parser.add_argument_group("Sion")
+        parser.add_argument("--seed", type=int, default=0)
+        parser.add_argument("--stacked_observations", type=int, default=32)
+        parser.add_argument("--lr", type=float, default=0.005)
+        parser.add_argument("--steps", type=int, default=1e6)
+        parser.add_argument("--batch_size", type=int, default=1024)
+        parser.add_argument("--encoding_size", type=int, default=30)
+        parser.add_argument("--max_windows", type=int, default=1e6)
+        parser.add_argument("--num_unroll_steps", type=int, default=5)
+        parser.add_argument("--td_steps", type=int, default=10)
+        parser.add_argument("--max_moves", type=int, default=2700)
+        parser.add_argument("--epsilon_gamma", type=float, default=0.997)
+        parser.add_argument("--checkpoint_interval", type=int, default=500)
+        parser.add_argument("--vf_coef", type=float, default=0.25)
+        parser.add_argument("--hidden_nodes", type=int, default=128)
+        parser.add_argument("--scheduler_gamma", type=float, default=0.95)
+        parser.add_argument("--pb_c_base", type=float, default=19652)
+        parser.add_argument("--pb_c_init", type=float, default=1.25)
+        parser.add_argument("--simulations", type=int, default=30)
+        parser.add_argument("--device", type=str, default="cpu")
+        parser.add_argument("--gpus", type=int, default=0)
+        parser.add_argument("--num_workers", type=int, default=1)
+        parser.add_argument("--log_dir", type=str, default=None)
+        return parent_parser

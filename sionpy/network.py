@@ -72,19 +72,26 @@ class ActorCriticModel(nn.Module):
             nn.ReLU(),
         )
 
-        self.dynamic_reward = nn.Sequential(nn.Linear(config.encoding_size, 1))
+        self.dynamic_reward = nn.Linear(config.encoding_size, 1)
         self.actor = ActorModel(config.encoding_size, self.action_dim)
         self.critic = CriticModel(config.encoding_size)
 
-    def initial_inference(self, observations: Tensor) -> ActorCriticOutput:
-        observations = observations.view(observations.shape[0], -1).float()
+    def initial_inference(self, observation: Tensor) -> ActorCriticOutput:
+        observations = observation.view(observation.shape[0], -1).float()
         encoded_state = self.representation.forward(observations)
         # encoded_state = self.normalize_encoded_state(encoded_state)
         policy = self.actor.action_distribution(encoded_state)
         probs = policy.logits
         value = self.critic.forward(encoded_state)
 
-        reward = torch.tensor([[0]]).float().to(observations.device)
+        reward = torch.log(
+            (
+                torch.zeros(1, 1)
+                .scatter(1, torch.tensor([[1 // 2]]).long(), 1.0)
+                .repeat(len(observation), 1)
+                .to(observation.device)
+            )
+        )
 
         return ActorCriticOutput(value, reward, probs, encoded_state)
 

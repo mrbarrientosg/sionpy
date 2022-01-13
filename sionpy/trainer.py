@@ -8,7 +8,7 @@ import copy
 from torch import Tensor
 from sionpy.network import ActorCriticModel
 from sionpy.shared_storage import SharedStorage
-
+from torch.functional import F
 
 @ray.remote
 class Trainer:
@@ -20,6 +20,10 @@ class Trainer:
         shared_storage: SharedStorage,
     ):
         self.config = config
+
+        np.random.seed(config.seed)
+        torch.manual_seed(config.seed)
+
         self.replay_buffer = replay_buffer
         self.shared_storage = shared_storage
 
@@ -85,11 +89,9 @@ class Trainer:
     def mse(
         self, value, reward, policy_logits, target_value, target_reward, target_policy,
     ):
-        value_loss = (-target_value * torch.nn.LogSoftmax(dim=1)(value)).sum(1)
-        reward_loss = (-target_reward * torch.nn.LogSoftmax(dim=1)(reward)).sum(1)
-        policy_loss = (-target_policy * torch.nn.LogSoftmax(dim=1)(policy_logits)).sum(
-            1
-        )
+        value_loss = F.mse_loss(value, target_value.unsqueeze(1)).sum()
+        reward_loss = F.mse_loss(reward, target_reward.unsqueeze(1)).sum()
+        policy_loss = F.mse_loss(policy_logits, target_policy).sum()
         return value_loss, reward_loss, policy_loss
 
     def loss_function(self, batch) -> Tensor:
@@ -127,13 +129,13 @@ class Trainer:
 
         value_loss, reward_loss, policy_loss = (0, 0, 0)
         value, reward, policy_logits = predictions[0]
-
+                
         current_value_loss, _, current_policy_loss = self.mse(
             value,
             reward,
             policy_logits,
-            target_value[:, 0].unsqueeze(0),
-            target_reward[:, 0].unsqueeze(0),
+            target_value[:, 0],
+            target_reward[:, 0],
             target_policy[:, 0],
         )
 
@@ -148,8 +150,8 @@ class Trainer:
                 value,
                 reward,
                 policy_logits,
-                target_value[:, i].unsqueeze(0),
-                target_reward[:, i].unsqueeze(0),
+                target_value[:, i],
+                target_reward[:, i],
                 target_policy[:, i],
             )
 
@@ -160,18 +162,6 @@ class Trainer:
         loss = value_loss * self.config.vf_coef + reward_loss + policy_loss
         loss.register_hook(lambda grad: grad * gradient_scale)
         loss = loss.mean()
-
-        # Se normalizan las recomenpesas y los advantages, para mejor apredizaje de la red
-        # with torch.no_grad():
-        #     returns = (returns - returns.mean()) / (returns.std() + 1e-8)
-        #     advantages = returns - values
-        #     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-
-        # policy_loss = -(advantages * log_probs).mean()
-
-        # value_loss = F.mse_loss(returns, values)
-
-        # loss = policy_loss + self.vf_coef * value_loss
 
         self.optimizer.zero_grad()
         loss.backward()

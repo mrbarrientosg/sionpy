@@ -14,16 +14,20 @@ from sionpy.shared_storage import SharedStorage
 class SelfPlay:
     def __init__(
         self,
-        make_env: Callable[[], Env],
+        make_env: Callable[[int], Env],
         initial_checkpoint,
         replay_buffer: ReplayBuffer,
         shared_storage: SharedStorage,
         config: Config,
+        seed: int = 0,
     ):
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        
         self.replay_buffer = replay_buffer
         self.shared_storage = shared_storage
         self.config = config
-        self.env = make_env()
+        self.env = make_env(seed)
         self.model = ActorCriticModel(config)
         self.model.load_state_dict(initial_checkpoint["weights"])
         self.model.to(config.device)
