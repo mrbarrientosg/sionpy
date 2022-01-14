@@ -9,7 +9,7 @@
             "type": "python",
             "request": "launch",
             "module": "sionpy",
-            "args": ["--gpus", "1", "--num_workers", "1", "--device", "cuda", "--simulations", "10", "--max_moves", "150"]
+            "args": ["--gpus", "1", "--num_workers", "1", "--device", "cuda"]
         }
     ]
 }

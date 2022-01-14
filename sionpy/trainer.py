@@ -10,6 +10,7 @@ from sionpy.network import ActorCriticModel
 from sionpy.shared_storage import SharedStorage
 from torch.functional import F
 
+
 @ray.remote
 class Trainer:
     def __init__(
@@ -61,7 +62,7 @@ class Trainer:
 
             self.update_lr()
 
-            (total_loss, value_loss, reward_loss, policy_loss,) = self.loss_function(
+            (total_loss, value_loss, reward_loss, policy_loss,) = self.update_weights(
                 batch
             )
 
@@ -86,16 +87,23 @@ class Trainer:
                 }
             )
 
-    def mse(
+    def initial_mse(
+        self, value, policy_logits, target_value, target_policy,
+    ):
+        value_loss = F.mse_loss(value, target_value).mean()
+        policy_loss = F.cross_entropy(policy_logits, target_policy).mean()
+        # policy_loss = (-target_policy * F.softmax(policy_logits, dim=1)).mean()
+        return value_loss, policy_loss
+
+    def recurrent_mse(
         self, value, reward, policy_logits, target_value, target_reward, target_policy,
     ):
-        value_loss = F.mse_loss(value, target_value.unsqueeze(1)).sum()
-        reward_loss = F.mse_loss(reward, target_reward.unsqueeze(1)).sum()
-        policy_loss = F.mse_loss(policy_logits, target_policy).sum()
+        value_loss = F.mse_loss(value, target_value).mean()
+        reward_loss = F.mse_loss(reward, target_reward)
+        policy_loss = F.cross_entropy(policy_logits, target_policy).mean()
         return value_loss, reward_loss, policy_loss
 
-    def loss_function(self, batch) -> Tensor:
-
+    def update_weights(self, batch) -> Tensor:
         (
             observation_batch,
             action_batch,
@@ -114,45 +122,52 @@ class Trainer:
         target_reward = torch.tensor(target_reward).float().to(self.config.device)
         target_policy = torch.tensor(target_policy).float().to(self.config.device)
 
-        ioutput = self.model.initial_inference(observation_batch)
-
-        predictions = [(ioutput.value, ioutput.reward, ioutput.logits)]
-
-        encoded_state = ioutput.encoded_state
-
-        for i in range(1, action_batch.shape[1]):
-            value, reward, logits, encoded_state = self.model.recurrent_inference(
-                encoded_state, action_batch[:, i]
-            )
-            encoded_state.register_hook(lambda grad: grad * 0.5)
-            predictions.append((value, reward, logits))
+        value, reward, policy_logits, encoded_state = self.model.initial_inference(
+            observation_batch
+        )
 
         value_loss, reward_loss, policy_loss = (0, 0, 0)
-        value, reward, policy_logits = predictions[0]
-                
-        current_value_loss, _, current_policy_loss = self.mse(
-            value,
-            reward,
-            policy_logits,
-            target_value[:, 0],
-            target_reward[:, 0],
-            target_policy[:, 0],
+
+        current_value_loss, current_policy_loss = self.initial_mse(
+            value.squeeze(-1), policy_logits, target_value[:, 0], target_policy[:, 0],
         )
 
         value_loss += current_value_loss
         policy_loss += current_policy_loss
 
-        gradient_scale = 1 / self.config.num_unroll_steps
-        for i in range(1, len(predictions)):
-            value, reward, policy_logits = predictions[i]
-
-            (current_value_loss, current_reward_loss, current_policy_loss,) = self.mse(
+        for i in range(1, self.config.num_unroll_steps + 1):
+            (
                 value,
                 reward,
+                policy_logits,
+                encoded_state,
+            ) = self.model.recurrent_inference(encoded_state, action_batch[:, i - 1])
+
+            (
+                current_value_loss,
+                current_reward_loss,
+                current_policy_loss,
+            ) = self.recurrent_mse(
+                value.squeeze(-1),
+                reward.squeeze(-1),
                 policy_logits,
                 target_value[:, i],
                 target_reward[:, i],
                 target_policy[:, i],
+            )
+
+            encoded_state.register_hook(lambda grad: grad * 0.5)
+
+            current_value_loss.register_hook(
+                lambda grad: grad * (1 / self.config.num_unroll_steps)
+            )
+
+            current_reward_loss.register_hook(
+                lambda grad: grad * (1 / self.config.num_unroll_steps)
+            )
+
+            current_policy_loss.register_hook(
+                lambda grad: grad * (1 / self.config.num_unroll_steps)
             )
 
             value_loss += current_value_loss
@@ -160,7 +175,6 @@ class Trainer:
             policy_loss += current_policy_loss
 
         loss = value_loss * self.config.vf_coef + reward_loss + policy_loss
-        loss.register_hook(lambda grad: grad * gradient_scale)
         loss = loss.mean()
 
         self.optimizer.zero_grad()

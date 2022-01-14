@@ -1,4 +1,5 @@
 from collections import namedtuple
+from turtle import forward
 from typing import NamedTuple, Tuple
 from torch import nn
 from torch import Tensor
@@ -25,12 +26,8 @@ class ActorModel(nn.Module):
         super(ActorModel, self).__init__()
         self.net = nn.Linear(hidden_nodes, action_dim)
 
-    def action_distribution(self, x: Tensor) -> Categorical:
-        x = self.net.forward(x)
-        return Categorical(logits=x)
-
-    def log_probs(self, distribution: Categorical, actions: Tensor) -> Tensor:
-        return distribution.log_prob(actions)
+    def forward(self, x: Tensor) -> Tensor:
+        return self.net.forward(x)
 
 
 class CriticModel(nn.Module):
@@ -62,14 +59,14 @@ class ActorCriticModel(nn.Module):
             ),
             nn.ReLU(),
             nn.Linear(config.hidden_nodes, config.encoding_size),
-            nn.ReLU(),
+            nn.Tanh(),
         )
 
         self.dynamic_state = nn.Sequential(
             nn.Linear(config.encoding_size + self.action_dim, config.hidden_nodes),
             nn.ReLU(),
             nn.Linear(config.hidden_nodes, config.encoding_size),
-            nn.ReLU(),
+            nn.Tanh(),
         )
 
         self.dynamic_reward = nn.Linear(config.encoding_size, 1)
@@ -79,63 +76,30 @@ class ActorCriticModel(nn.Module):
     def initial_inference(self, observation: Tensor) -> ActorCriticOutput:
         observations = observation.view(observation.shape[0], -1).float()
         encoded_state = self.representation.forward(observations)
-        # encoded_state = self.normalize_encoded_state(encoded_state)
-        policy = self.actor.action_distribution(encoded_state)
-        probs = policy.logits
+        policy = self.actor.forward(encoded_state)
         value = self.critic.forward(encoded_state)
 
-        reward = torch.log(
-            (
-                torch.zeros(1, 1)
-                .scatter(1, torch.tensor([[1 // 2]]).long(), 1.0)
-                .repeat(len(observation), 1)
-                .to(observation.device)
-            )
+        reward = (
+            torch.tensor([0.0]).float().repeat(len(observation)).to(observation.device)
         )
 
-        return ActorCriticOutput(value, reward, probs, encoded_state)
+        return ActorCriticOutput(value, reward, policy, encoded_state)
 
     def recurrent_inference(
         self, encoded_state: Tensor, action: Tensor
     ) -> ActorCriticOutput:
+
         action_one_hot = (
             torch.zeros((action.shape[0], self.action_dim)).to(action.device).float()
         )
         action_one_hot.scatter_(1, action.long(), 1.0)
-        x = torch.cat((encoded_state, action_one_hot), dim=1)
+        x = torch.cat([encoded_state, action_one_hot], dim=1)
 
         next_enconded_state = self.dynamic_state.forward(x)
         reward = self.dynamic_reward.forward(next_enconded_state)
-        # next_enconded_state = self.normalize_encoded_state(next_enconded_state)
 
-        policy = self.actor.action_distribution(next_enconded_state)
-        probs = policy.logits
+        policy = self.actor.forward(next_enconded_state)
         value = self.critic.forward(next_enconded_state)
 
-        return ActorCriticOutput(value, reward, probs, next_enconded_state)
+        return ActorCriticOutput(value, reward, policy, next_enconded_state)
 
-    # def forward(self, observations: Tensor) -> ActorCriticOutput:
-    #     observations = observations.view(observations.shape[0], -1).float()
-    #     x = self.representation.forward(observations)
-    #     encoded_state = self.normalize_encoded_state(x)
-    #     policy = self.actor.action_distribution(encoded_state)
-    #     actions = policy.sample()
-    #     log_probs = self.actor.log_probs(policy, actions)
-    #     values = self.critic.forward(encoded_state)
-    #     return ActorCriticOutput(actions, values, log_probs)
-
-    # def evaluation_actions(
-    #     self, observations: Tensor, actions: Tensor
-    # ) -> Tuple[Tensor, Tensor]:
-    #     observations = observations.view(observations.shape[0], -1).float()
-    #     x = self.body.forward(observations)
-    #     x = self.normalize_encoded_state(x)
-    #     policy = self.actor.action_distribution(x)
-    #     log_probs = self.actor.log_probs(policy, actions)
-    #     values = self.critic.forward(x)
-    #     return values, log_probs
-
-    def normalize_encoded_state(self, encoded_state: Tensor):
-        mean, std = encoded_state.mean(), encoded_state.std()
-        encoded_state_normalized = encoded_state - mean / (std + 1e-8)
-        return encoded_state_normalized

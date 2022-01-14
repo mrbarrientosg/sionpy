@@ -9,7 +9,6 @@ from sionpy.config import Config
 from sionpy.mcts import MCTS, Node
 from sionpy.network import ActorCriticModel
 from sionpy.buffer import (
-    BufferDataset,
     Experience,
     GameHistory,
     ReplayBuffer,

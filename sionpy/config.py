@@ -9,7 +9,7 @@ class Config:
         self,
         game_id: str,
         seed: int = 0,
-        stacked_observations: int = 32,
+        stacked_observations: int = 16,
         lr: float = 0.005,
         steps: int = 1e6,
         batch_size: int = 1024,
@@ -21,7 +21,7 @@ class Config:
         epsilon_gamma: float = 0.997,
         checkpoint_interval: int = 500,
         vf_coef: float = 0.25,
-        hidden_nodes: int = 128,
+        hidden_nodes: int = 64,
         scheduler_gamma: float = 0.95,
         pb_c_base: float = 19652,
         pb_c_init: float = 1.25,
@@ -86,7 +86,7 @@ class Config:
     def add_model_specific_args(parent_parser: ArgumentParser):
         parser = parent_parser.add_argument_group("Sion")
         parser.add_argument("--seed", type=int, default=0)
-        parser.add_argument("--stacked_observations", type=int, default=32)
+        parser.add_argument("--stacked_observations", type=int, default=16)
         parser.add_argument("--lr", type=float, default=0.005)
         parser.add_argument("--steps", type=int, default=1e6)
         parser.add_argument("--batch_size", type=int, default=1024)
@@ -94,11 +94,11 @@ class Config:
         parser.add_argument("--max_windows", type=int, default=1e6)
         parser.add_argument("--num_unroll_steps", type=int, default=5)
         parser.add_argument("--td_steps", type=int, default=10)
-        parser.add_argument("--max_moves", type=int, default=2700)
+        parser.add_argument("--max_moves", type=int, default=27000)
         parser.add_argument("--epsilon_gamma", type=float, default=0.997)
         parser.add_argument("--checkpoint_interval", type=int, default=500)
         parser.add_argument("--vf_coef", type=float, default=0.25)
-        parser.add_argument("--hidden_nodes", type=int, default=128)
+        parser.add_argument("--hidden_nodes", type=int, default=64)
         parser.add_argument("--scheduler_gamma", type=float, default=0.95)
         parser.add_argument("--pb_c_base", type=float, default=19652)
         parser.add_argument("--pb_c_init", type=float, default=1.25)

@@ -32,23 +32,6 @@ ReplaySample = namedtuple(
 )
 
 
-class BufferDataset(Dataset):
-    def __init__(self, data: ReplaySample):
-        self.buffer = data
-
-    def __len__(self):
-        return len(self.buffer.action_batch)
-
-    def __getitem__(self, idx):
-        return (
-            self.buffer.observation_batch[idx],
-            self.buffer.action_batch[idx],
-            self.buffer.value_batch[idx],
-            self.buffer.reward_batch[idx],
-            self.buffer.policy_batch[idx],
-        )
-
-
 class GameHistory:
     def __init__(self, num_stacked_observations: int):
         self.observations = []
@@ -64,21 +47,15 @@ class GameHistory:
         self.rewards.append(exp.reward)
 
     def store_search_statistics(self, root: Node, action_space: List[int]):
-        # Turn visit count from root into a policy
-        if root is not None:
-            sum_visits = sum(child.visit_count for child in root.children.values())
-            self.child_visits.append(
-                [
-                    root.children[a].visit_count / sum_visits
-                    if a in root.children
-                    else 0
-                    for a in action_space
-                ]
-            )
+        sum_visits = sum(child.visit_count for child in root.children.values())
+        self.child_visits.append(
+            [
+                root.children[a].visit_count / sum_visits if a in root.children else 0
+                for a in action_space
+            ]
+        )
 
-            self.root_values.append(root.value())
-        else:
-            self.root_values.append(None)
+        self.root_values.append(root.value())
 
     def get_stacked_observations(self, index: int) -> np.ndarray:
         index = index % len(self.observations)
@@ -125,7 +102,7 @@ class ReplayBuffer:
         self.action_space = config.action_space
         self.num_played_games = initial_checkpoint["num_played_games"]
         self.num_played_steps = initial_checkpoint["num_played_steps"]
-        
+
         np.random.seed(config.seed)
 
     def add(self, game_history: GameHistory, shared_storage: SharedStorage = None):
@@ -149,20 +126,16 @@ class ReplayBuffer:
             [],
         )
 
-        selected_games = np.random.choice(
-            list(range(len(self.game_histories))), batch_size
-        )
+        games = [self.sample_game() for _ in range(batch_size)]
+        game_pos = [(g, self.sample_position(g)) for g in games]
 
-        for game_idx in selected_games:
-            game_history = self.game_histories[game_idx]
-            game_pos = np.random.choice(len(game_history.root_values))
+        for (game, game_idx) in game_pos:
+            values, rewards, policies = self.make_target(game, game_idx)
 
-            values, rewards, policies, actions = self.make_target(
-                game_history, game_pos
+            observation_batch.append(game.get_stacked_observations(game_idx))
+            action_batch.append(
+                game.actions[game_idx : game_idx + self.num_unroll_steps]
             )
-
-            observation_batch.append(game_history.get_stacked_observations(game_pos))
-            action_batch.append(actions)
             value_batch.append(values)
             reward_batch.append(rewards)
             policy_batch.append(policies)
@@ -172,7 +145,8 @@ class ReplayBuffer:
         )
 
     def make_target(self, game_history: GameHistory, state_index):
-        target_values, target_rewards, target_policies, actions = [], [], [], []
+        target_values, target_rewards, target_policies = [], [], []
+
         for current_index in range(
             state_index, state_index + self.num_unroll_steps + 1
         ):
@@ -182,18 +156,6 @@ class ReplayBuffer:
                 target_values.append(value)
                 target_rewards.append(game_history.rewards[current_index])
                 target_policies.append(game_history.child_visits[current_index])
-                actions.append(game_history.actions[current_index])
-            elif current_index == len(game_history.root_values):
-                target_values.append(0)
-                target_rewards.append(game_history.rewards[current_index])
-                # Uniform policy
-                target_policies.append(
-                    [
-                        1 / len(game_history.child_visits[0])
-                        for _ in range(len(game_history.child_visits[0]))
-                    ]
-                )
-                actions.append(game_history.actions[current_index])
             else:
                 # States past the end of games are treated as absorbing states
                 target_values.append(0)
@@ -205,9 +167,14 @@ class ReplayBuffer:
                         for _ in range(len(game_history.child_visits[0]))
                     ]
                 )
-                actions.append(np.random.choice(self.action_space))
 
-        return target_values, target_rewards, target_policies, actions
+        return target_values, target_rewards, target_policies
+
+    def sample_game(self) -> GameHistory:
+        return self.game_histories[np.random.randint(len(self.game_histories))]
+
+    def sample_position(self, game) -> int:
+        return np.random.randint(len(game.actions) - self.num_unroll_steps)
 
     def compute_target_value(self, game_history: GameHistory, index: int):
         # The value target is the discounted root value of the search tree td_steps into the
@@ -229,31 +196,15 @@ class ReplayBuffer:
 
         return value
 
-    # def compute_advantage_returns(self, last_value: Tensor, gamma: float = 0.95):
-    #     g = last_value
-    #     self.returns.clear()
+    # def batch(self, batch_size: int):
+    #     batch = self.sample()
+    #     size = len(self.game_histories)
 
-    #     for step in reversed(range(len(self.rewards))):
-    #         g = self.rewards[step] + gamma * g * self.masks[step]
-    #         self.returns.insert(0, g)
-
-    def batch(self, batch_size: int):
-        batch = self.sample()
-        size = len(self.game_histories)
-
-        for idx in range(0, size, batch_size):
-            yield (
-                batch.observation_batch[idx : min(idx + batch_size, size)],
-                batch.action_batch[idx : min(idx + batch_size, size)],
-                batch.value_batch[idx : min(idx + batch_size, size)],
-                batch.reward_batch[idx : min(idx + batch_size, size)],
-                batch.policy_batch[idx : min(idx + batch_size, size)],
-            )
-
-    # def clear(self):
-    #     self.observations.clear()
-    #     self.actions.clear()
-    #     self.rewards.clear()
-    #     self.masks.clear()
-    #     self.states.clear()
-    #     self.returns.clear()
+    #     for idx in range(0, size, batch_size):
+    #         yield (
+    #             batch.observation_batch[idx : min(idx + batch_size, size)],
+    #             batch.action_batch[idx : min(idx + batch_size, size)],
+    #             batch.value_batch[idx : min(idx + batch_size, size)],
+    #             batch.reward_batch[idx : min(idx + batch_size, size)],
+    #             batch.policy_batch[idx : min(idx + batch_size, size)],
+    #         )
