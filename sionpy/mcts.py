@@ -3,6 +3,7 @@ import torch
 import math
 from sionpy.config import Config
 from sionpy.network import ActorCriticModel
+from sionpy.transformation import transform_to_scalar
 
 
 class MinMaxStats(object):
@@ -65,9 +66,13 @@ class MCTS:
         observation = torch.tensor(observation).float().to(device).unsqueeze(0)
 
         output = model.initial_inference(observation)
-        root_predicted_value = output.value.item()
+        root_predicted_value = transform_to_scalar(
+            output.value, self.config.support_size
+        ).item()
 
-        root.expand(actions, output.reward.item(), output.logits, output.encoded_state)
+        reward = transform_to_scalar(output.reward, self.config.support_size).item()
+
+        root.expand(actions, reward, output.logits, output.encoded_state)
 
         max_tree_depth = 0
         for _ in range(simulations):
@@ -84,11 +89,13 @@ class MCTS:
             action = torch.tensor([[action]]).long().to(parent.hidden_state.device)
             output = model.recurrent_inference(parent.hidden_state, action)
 
-            node.expand(
-                actions, output.reward.item(), output.logits, output.encoded_state
-            )
+            reward = transform_to_scalar(output.reward, self.config.support_size).item()
 
-            self.backpropagate(search_path, output.value.item(), min_max_stats)
+            node.expand(actions, reward, output.logits, output.encoded_state)
+
+            value = transform_to_scalar(output.value, self.config.support_size).item()
+
+            self.backpropagate(search_path, value, min_max_stats)
 
             max_tree_depth = max(max_tree_depth, current_tree_depth)
 

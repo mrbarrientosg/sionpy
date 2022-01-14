@@ -22,7 +22,7 @@ class Config:
         checkpoint_interval: int = 500,
         vf_coef: float = 0.25,
         hidden_nodes: int = 64,
-        scheduler_gamma: float = 0.95,
+        support_size: int = 300,
         pb_c_base: float = 19652,
         pb_c_init: float = 1.25,
         simulations: int = 30,
@@ -58,7 +58,7 @@ class Config:
         self.td_steps = td_steps
         self.checkpoint_interval = checkpoint_interval
         self.hidden_nodes = hidden_nodes
-        self.scheduler_gamma = scheduler_gamma
+        self.support_size = support_size
 
         if log_dir is None:
             log_dir = os.path.join(
@@ -99,7 +99,7 @@ class Config:
         parser.add_argument("--checkpoint_interval", type=int, default=500)
         parser.add_argument("--vf_coef", type=float, default=0.25)
         parser.add_argument("--hidden_nodes", type=int, default=64)
-        parser.add_argument("--scheduler_gamma", type=float, default=0.95)
+        parser.add_argument("--support_size", type=int, default=300)
         parser.add_argument("--pb_c_base", type=float, default=19652)
         parser.add_argument("--pb_c_init", type=float, default=1.25)
         parser.add_argument("--simulations", type=int, default=30)

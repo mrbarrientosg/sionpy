@@ -31,9 +31,9 @@ class ActorModel(nn.Module):
 
 
 class CriticModel(nn.Module):
-    def __init__(self, hidden_nodes: int):
+    def __init__(self, hidden_nodes: int, support_size: int):
         super(CriticModel, self).__init__()
-        self.net = nn.Linear(hidden_nodes, 1)
+        self.net = nn.Linear(hidden_nodes, support_size)
 
     def forward(self, x: Tensor) -> Tensor:
         return self.net.forward(x)
@@ -45,6 +45,7 @@ class ActorCriticModel(nn.Module):
     ):
         super(ActorCriticModel, self).__init__()
         self.action_dim = len(config.action_space)
+        self.full_support_size = 2 * config.support_size + 1
 
         self.representation = nn.Sequential(
             nn.Linear(
@@ -69,9 +70,9 @@ class ActorCriticModel(nn.Module):
             nn.Tanh(),
         )
 
-        self.dynamic_reward = nn.Linear(config.encoding_size, 1)
+        self.dynamic_reward = nn.Linear(config.encoding_size, self.full_support_size)
         self.actor = ActorModel(config.encoding_size, self.action_dim)
-        self.critic = CriticModel(config.encoding_size)
+        self.critic = CriticModel(config.encoding_size, self.full_support_size)
 
     def initial_inference(self, observation: Tensor) -> ActorCriticOutput:
         observations = observation.view(observation.shape[0], -1).float()
@@ -79,8 +80,13 @@ class ActorCriticModel(nn.Module):
         policy = self.actor.forward(encoded_state)
         value = self.critic.forward(encoded_state)
 
-        reward = (
-            torch.tensor([0.0]).float().repeat(len(observation)).to(observation.device)
+        reward = torch.log(
+            (
+                torch.zeros(1, self.full_support_size)
+                .scatter(1, torch.tensor([[self.full_support_size // 2]]).long(), 1.0)
+                .repeat(len(observation), 1)
+                .to(observation.device)
+            )
         )
 
         return ActorCriticOutput(value, reward, policy, encoded_state)

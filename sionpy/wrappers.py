@@ -224,7 +224,7 @@ class Game(gym.Wrapper):
         self.env = NoopResetEnv(self.env, noop_max=130)
         self.env = MaxAndSkipEnv(self.env, skip=skip_frames)
         # self.env = EpisodicLifeEnv(self.env)
-        self.env = ClipRewardEnv(self.env)
+        # self.env = ClipRewardEnv(self.env)
         self.env = RelativeObservation(
             self.env,
             [

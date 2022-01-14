@@ -10,6 +10,8 @@ from sionpy.network import ActorCriticModel
 from sionpy.shared_storage import SharedStorage
 from torch.functional import F
 
+from sionpy.transformation import transform_to_logits
+
 
 @ray.remote
 class Trainer:
@@ -44,9 +46,9 @@ class Trainer:
                 copy.deepcopy(initial_checkpoint["optimizer_state"])
             )
 
-        # self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
-        #     self.optimizer, gamma=self.config.scheduler_gamma
-        # )
+        self.scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            self.optimizer, milestones=[config.lr_decay_steps], gamma=config.lr_decay_rate
+        )
 
     def train(self):
         while ray.get(self.shared_storage.get_info.remote("num_played_games")) < 1:
@@ -60,11 +62,11 @@ class Trainer:
             batch = ray.get(next_batch)
             next_batch = self.replay_buffer.sample.remote(self.config.batch_size)
 
-            self.update_lr()
-
             (total_loss, value_loss, reward_loss, policy_loss,) = self.update_weights(
                 batch
             )
+
+            self.scheduler.step()
 
             if self.training_step % self.config.checkpoint_interval == 0:
                 self.shared_storage.set_info.remote(
@@ -90,17 +92,17 @@ class Trainer:
     def initial_mse(
         self, value, policy_logits, target_value, target_policy,
     ):
-        value_loss = F.mse_loss(value, target_value).mean()
-        policy_loss = F.cross_entropy(policy_logits, target_policy).mean()
+        value_loss = F.cross_entropy(value, target_value).sum()
+        policy_loss = F.cross_entropy(policy_logits, target_policy).sum()
         # policy_loss = (-target_policy * F.softmax(policy_logits, dim=1)).mean()
         return value_loss, policy_loss
 
     def recurrent_mse(
         self, value, reward, policy_logits, target_value, target_reward, target_policy,
     ):
-        value_loss = F.mse_loss(value, target_value).mean()
-        reward_loss = F.mse_loss(reward, target_reward)
-        policy_loss = F.cross_entropy(policy_logits, target_policy).mean()
+        value_loss = F.cross_entropy(value, target_value).sum()
+        reward_loss = F.cross_entropy(reward, target_reward).sum()
+        policy_loss = F.cross_entropy(policy_logits, target_policy).sum()
         return value_loss, reward_loss, policy_loss
 
     def update_weights(self, batch) -> Tensor:
@@ -121,6 +123,9 @@ class Trainer:
         target_value = torch.tensor(target_value).float().to(self.config.device)
         target_reward = torch.tensor(target_reward).float().to(self.config.device)
         target_policy = torch.tensor(target_policy).float().to(self.config.device)
+
+        target_value = transform_to_logits(target_value, self.config.support_size)
+        target_reward = transform_to_logits(target_reward, self.config.support_size)
 
         value, reward, policy_logits, encoded_state = self.model.initial_inference(
             observation_batch
@@ -158,21 +163,9 @@ class Trainer:
 
             encoded_state.register_hook(lambda grad: grad * 0.5)
 
-            current_value_loss.register_hook(
-                lambda grad: grad * (1 / self.config.num_unroll_steps)
-            )
-
-            current_reward_loss.register_hook(
-                lambda grad: grad * (1 / self.config.num_unroll_steps)
-            )
-
-            current_policy_loss.register_hook(
-                lambda grad: grad * (1 / self.config.num_unroll_steps)
-            )
-
-            value_loss += current_value_loss
-            reward_loss += current_reward_loss
-            policy_loss += current_policy_loss
+            value_loss += current_value_loss / self.config.num_unroll_steps
+            reward_loss += current_reward_loss / self.config.num_unroll_steps
+            policy_loss += current_policy_loss / self.config.num_unroll_steps
 
         loss = value_loss * self.config.vf_coef + reward_loss + policy_loss
         loss = loss.mean()
@@ -189,12 +182,12 @@ class Trainer:
             policy_loss.mean().item(),
         )
 
-    def update_lr(self):
-        """
-        Update learning rate
-        """
-        lr = self.config.lr * self.config.lr_decay_rate ** (
-            self.training_step / self.config.lr_decay_steps
-        )
-        for param_group in self.optimizer.param_groups:
-            param_group["lr"] = lr
+    # def update_lr(self):
+    #     """
+    #     Update learning rate
+    #     """
+    #     lr = self.config.lr * self.config.lr_decay_rate ** (
+    #         self.training_step / self.config.lr_decay_steps
+    #     )
+    #     for param_group in self.optimizer.param_groups:
+    #         param_group["lr"] = lr
