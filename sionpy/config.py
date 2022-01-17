@@ -1,7 +1,7 @@
 from argparse import ArgumentParser
-import datetime
 import os
 import torch
+from sionpy.transformation import DATE
 
 
 class Config:
@@ -61,11 +61,7 @@ class Config:
         self.support_size = support_size
 
         if log_dir is None:
-            log_dir = os.path.join(
-                "results",
-                game_id,
-                datetime.datetime.now().strftime("%d-%m-%Y--%H-%M-%S"),
-            )
+            log_dir = os.path.join("results", game_id, DATE,)
         self.log_dir = log_dir
 
     def visit_softmax_temperature_fn(self, trained_steps):
@@ -75,9 +71,9 @@ class Config:
         Returns:
             Positive float.
         """
-        if trained_steps < 500e3:
+        if trained_steps < 0.5 * self.steps:
             return 1.0
-        elif trained_steps < 750e3:
+        elif trained_steps < 0.75 * self.steps:
             return 0.5
         else:
             return 0.25
@@ -86,23 +82,23 @@ class Config:
     def add_model_specific_args(parent_parser: ArgumentParser):
         parser = parent_parser.add_argument_group("Sion")
         parser.add_argument("--seed", type=int, default=0)
-        parser.add_argument("--stacked_observations", type=int, default=16)
-        parser.add_argument("--lr", type=float, default=0.005)
+        parser.add_argument("--stacked_observations", type=int, default=8)
+        parser.add_argument("--lr", type=float, default=0.05)
         parser.add_argument("--steps", type=int, default=1e6)
-        parser.add_argument("--batch_size", type=int, default=1024)
+        parser.add_argument("--batch_size", type=int, default=512)
         parser.add_argument("--encoding_size", type=int, default=30)
         parser.add_argument("--max_windows", type=int, default=1e6)
         parser.add_argument("--num_unroll_steps", type=int, default=5)
         parser.add_argument("--td_steps", type=int, default=10)
-        parser.add_argument("--max_moves", type=int, default=27000)
-        parser.add_argument("--epsilon_gamma", type=float, default=0.997)
+        parser.add_argument("--max_moves", type=int, default=2500)
+        parser.add_argument("--epsilon_gamma", type=float, default=0.999)
         parser.add_argument("--checkpoint_interval", type=int, default=500)
         parser.add_argument("--vf_coef", type=float, default=0.25)
         parser.add_argument("--hidden_nodes", type=int, default=64)
         parser.add_argument("--support_size", type=int, default=300)
         parser.add_argument("--pb_c_base", type=float, default=19652)
         parser.add_argument("--pb_c_init", type=float, default=1.25)
-        parser.add_argument("--simulations", type=int, default=30)
+        parser.add_argument("--simulations", type=int, default=50)
         parser.add_argument("--device", type=str, default="cpu")
         parser.add_argument("--gpus", type=int, default=0)
         parser.add_argument("--num_workers", type=int, default=1)

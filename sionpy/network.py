@@ -9,9 +9,20 @@ from torch.distributions import Categorical
 
 from sionpy.config import Config
 
-# ActorCriticOutput = namedtuple(
-#     "ActorCriticOutput", field_names=["value", "reward", "probs", "encoded_state"]
-# )
+
+def mlp(
+    input_size,
+    layer_sizes,
+    output_size,
+    output_activation=torch.nn.Identity,
+    activation=torch.nn.ELU,
+):
+    sizes = [input_size] + layer_sizes + [output_size]
+    layers = []
+    for i in range(len(sizes) - 1):
+        act = activation if i < len(sizes) - 2 else output_activation
+        layers += [torch.nn.Linear(sizes[i], sizes[i + 1]), act()]
+    return torch.nn.Sequential(*layers)
 
 
 class ActorCriticOutput(NamedTuple):
@@ -47,38 +58,39 @@ class ActorCriticModel(nn.Module):
         self.action_dim = len(config.action_space)
         self.full_support_size = 2 * config.support_size + 1
 
-        self.representation = nn.Sequential(
-            nn.Linear(
-                config.observation_shape[0]
-                * config.observation_shape[1]
-                * config.observation_shape[2]
-                * (config.stacked_observations + 1)
-                + config.stacked_observations
-                * config.observation_shape[1]
-                * config.observation_shape[2],
-                config.hidden_nodes,
-            ),
-            nn.ReLU(),
-            nn.Linear(config.hidden_nodes, config.encoding_size),
-            nn.Tanh(),
+        self.representation = mlp(
+            config.observation_shape[0]
+            * config.observation_shape[1]
+            * config.observation_shape[2]
+            * (config.stacked_observations + 1)
+            + config.stacked_observations
+            * config.observation_shape[1]
+            * config.observation_shape[2],
+            [],
+            config.encoding_size,
         )
 
-        self.dynamic_state = nn.Sequential(
-            nn.Linear(config.encoding_size + self.action_dim, config.hidden_nodes),
-            nn.ReLU(),
-            nn.Linear(config.hidden_nodes, config.encoding_size),
-            nn.Tanh(),
+        self.dynamic_state = mlp(
+            config.encoding_size + self.action_dim,
+            [config.hidden_nodes],
+            config.encoding_size,
         )
 
-        self.dynamic_reward = nn.Linear(config.encoding_size, self.full_support_size)
-        self.actor = ActorModel(config.encoding_size, self.action_dim)
-        self.critic = CriticModel(config.encoding_size, self.full_support_size)
+        self.dynamic_reward = mlp(
+            config.encoding_size, [config.hidden_nodes], self.full_support_size
+        )
+        self.actor = mlp(config.encoding_size, [], self.action_dim)
+        self.critic = mlp(
+            config.encoding_size, [], self.full_support_size
+        )
 
     def initial_inference(self, observation: Tensor) -> ActorCriticOutput:
-        observations = observation.view(observation.shape[0], -1).float()
-        encoded_state = self.representation.forward(observations)
-        policy = self.actor.forward(encoded_state)
-        value = self.critic.forward(encoded_state)
+        encoded_state = self.representation.forward(
+            observation.view(observation.shape[0], -1)
+        )
+        encoded_state_normalized = self.normalize_state(encoded_state)
+        policy = self.actor.forward(encoded_state_normalized)
+        value = self.critic.forward(encoded_state_normalized)
 
         reward = torch.log(
             (
@@ -89,7 +101,7 @@ class ActorCriticModel(nn.Module):
             )
         )
 
-        return ActorCriticOutput(value, reward, policy, encoded_state)
+        return ActorCriticOutput(value, reward, policy, encoded_state_normalized)
 
     def recurrent_inference(
         self, encoded_state: Tensor, action: Tensor
@@ -104,8 +116,19 @@ class ActorCriticModel(nn.Module):
         next_enconded_state = self.dynamic_state.forward(x)
         reward = self.dynamic_reward.forward(next_enconded_state)
 
-        policy = self.actor.forward(next_enconded_state)
-        value = self.critic.forward(next_enconded_state)
+        encoded_state_normalized = self.normalize_state(next_enconded_state)
 
-        return ActorCriticOutput(value, reward, policy, next_enconded_state)
+        policy = self.actor.forward(encoded_state_normalized)
+        value = self.critic.forward(encoded_state_normalized)
 
+        return ActorCriticOutput(value, reward, policy, encoded_state_normalized)
+
+    def normalize_state(self, encoded_state: Tensor) -> Tensor:
+        min_encoded_state = encoded_state.min(1, keepdim=True)[0]
+        max_encoded_state = encoded_state.max(1, keepdim=True)[0]
+        scale_encoded_state = max_encoded_state - min_encoded_state
+        scale_encoded_state[scale_encoded_state < 1e-5] += 1e-5
+        encoded_state_normalized = (
+            encoded_state - min_encoded_state
+        ) / scale_encoded_state
+        return encoded_state_normalized

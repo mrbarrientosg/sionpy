@@ -49,18 +49,6 @@ class MaxAndSkipEnv(gym.Wrapper):
     def reset(self, **kwargs):
         return self.env.reset(**kwargs)
 
-
-class FlattenObservation(gym.ObservationWrapper):
-    r"""Observation wrapper that flattens the observation."""
-
-    def __init__(self, env):
-        super(FlattenObservation, self).__init__(env)
-        self.observation_space = spaces.flatten_space(env.observation_space)
-
-    def observation(self, observation):
-        return np.stack(np.array(observation), axis=1).flatten()
-
-
 class ClipRewardEnv(gym.RewardWrapper):
     """
     Clips the reward to {+1, 0, -1} by its sign.
@@ -138,13 +126,21 @@ class EpisodicLifeEnv(gym.Wrapper):
         self.lives = lives
         return obs, reward, done, info
 
+    def reset(self, **kwargs) -> np.ndarray:
+        if self.was_real_done:
+            obs = self.env.reset(**kwargs)
+        else:
+            # no-op step to advance from terminal/lost life state
+            obs, _, _, _ = self.env.step(0)
+        self.lives = self.env.unwrapped.ale.lives()
+        return obs
+
 
 class RelativeObservation(gym.ObservationWrapper):
     def __init__(self, env, objects):
         super().__init__(env)
         self.objects = objects
-        self.num_envs = 1
-        self.observation_space = Box(low=-1, high=1, shape=(1, 1, 30), dtype=np.float32)
+        #self.observation_space = Box(low=-1, high=1, shape=(1, 1, 30), dtype=np.float32)
 
     def observation(self, observation):
         gray = cv2.cvtColor(observation, cv2.COLOR_BGR2GRAY)
@@ -221,8 +217,8 @@ class RelativeObservation(gym.ObservationWrapper):
 class Game(gym.Wrapper):
     def __init__(self, env: Env, skip_frames: int = 5):
         super().__init__(env)
-        self.env = NoopResetEnv(self.env, noop_max=130)
-        self.env = MaxAndSkipEnv(self.env, skip=skip_frames)
+        # self.env = NoopResetEnv(self.env, noop_max=30)
+        # self.env = MaxAndSkipEnv(self.env, skip=skip_frames)
         # self.env = EpisodicLifeEnv(self.env)
         # self.env = ClipRewardEnv(self.env)
         self.env = RelativeObservation(

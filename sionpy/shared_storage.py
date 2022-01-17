@@ -16,6 +16,9 @@ class SharedStorage:
             path = os.path.join(self.config.log_dir, "model.checkpoint")
 
         torch.save(self.current_checkpoint, path)
+        
+    def get_checkpoint(self):
+        return copy.deepcopy(self.current_checkpoint)
 
     def get_info(self, keys):
         if isinstance(keys, str):

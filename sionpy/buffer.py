@@ -1,9 +1,6 @@
 from collections import namedtuple
-from typing import List, NamedTuple
+from typing import List
 import numpy as np
-import torch
-from torch import Tensor
-from torch.utils.data import Dataset
 import ray
 from sionpy.config import Config
 from sionpy.mcts import Node
@@ -28,6 +25,7 @@ ReplaySample = namedtuple(
         "value_batch",
         "reward_batch",
         "policy_batch",
+        "gradient_scale_batch",
     ],
 )
 
@@ -94,6 +92,7 @@ class ReplayBuffer:
     def __init__(
         self, initial_checkpoint, config: Config,
     ):
+        self.config = config
         self.game_histories: List[GameHistory] = []
         self.max_windows = config.max_windows
         self.num_unroll_steps = config.num_unroll_steps
@@ -118,34 +117,42 @@ class ReplayBuffer:
             shared_storage.set_info.remote("num_played_steps", self.num_played_steps)
 
     def sample(self, batch_size: int) -> ReplaySample:
-        (observation_batch, action_batch, reward_batch, value_batch, policy_batch,) = (
-            [],
-            [],
-            [],
-            [],
-            [],
-        )
+        (
+            observation_batch,
+            action_batch,
+            reward_batch,
+            value_batch,
+            policy_batch,
+            gradient_scale_batch,
+        ) = ([], [], [], [], [], [])
 
-        games = [self.sample_game() for _ in range(batch_size)]
+        games = self.sample_games(batch_size)
         game_pos = [(g, self.sample_position(g)) for g in games]
 
         for (game, game_idx) in game_pos:
-            values, rewards, policies = self.make_target(game, game_idx)
+            values, rewards, policies, actions = self.make_target(game, game_idx)
 
             observation_batch.append(game.get_stacked_observations(game_idx))
-            action_batch.append(
-                game.actions[game_idx : game_idx + self.num_unroll_steps]
-            )
+            action_batch.append(actions)
             value_batch.append(values)
             reward_batch.append(rewards)
             policy_batch.append(policies)
+            gradient_scale_batch.append(
+                [min(self.config.num_unroll_steps, len(game.actions) - game_idx,)]
+                * len(actions)
+            )
 
         return ReplaySample(
-            observation_batch, action_batch, value_batch, reward_batch, policy_batch,
+            observation_batch,
+            action_batch,
+            value_batch,
+            reward_batch,
+            policy_batch,
+            gradient_scale_batch,
         )
 
     def make_target(self, game_history: GameHistory, state_index):
-        target_values, target_rewards, target_policies = [], [], []
+        target_values, target_rewards, target_policies, actions = [], [], [], []
 
         for current_index in range(
             state_index, state_index + self.num_unroll_steps + 1
@@ -154,6 +161,7 @@ class ReplayBuffer:
 
             if current_index < len(game_history.root_values):
                 target_values.append(value)
+                actions.append(game_history.actions[current_index])
                 target_rewards.append(game_history.rewards[current_index])
                 target_policies.append(game_history.child_visits[current_index])
             else:
@@ -167,14 +175,15 @@ class ReplayBuffer:
                         for _ in range(len(game_history.child_visits[0]))
                     ]
                 )
+                actions.append(np.random.choice(self.config.action_space))
 
-        return target_values, target_rewards, target_policies
+        return target_values, target_rewards, target_policies, actions
 
-    def sample_game(self) -> GameHistory:
-        return self.game_histories[np.random.randint(len(self.game_histories))]
+    def sample_games(self, batch_size) -> GameHistory:
+        return np.random.choice(self.game_histories, batch_size)
 
     def sample_position(self, game) -> int:
-        return np.random.randint(len(game.actions) - self.num_unroll_steps)
+        return np.random.choice(len(game.root_values))
 
     def compute_target_value(self, game_history: GameHistory, index: int):
         # The value target is the discounted root value of the search tree td_steps into the
@@ -195,16 +204,3 @@ class ReplayBuffer:
             value += reward * (self.gamma ** i)
 
         return value
-
-    # def batch(self, batch_size: int):
-    #     batch = self.sample()
-    #     size = len(self.game_histories)
-
-    #     for idx in range(0, size, batch_size):
-    #         yield (
-    #             batch.observation_batch[idx : min(idx + batch_size, size)],
-    #             batch.action_batch[idx : min(idx + batch_size, size)],
-    #             batch.value_batch[idx : min(idx + batch_size, size)],
-    #             batch.reward_batch[idx : min(idx + batch_size, size)],
-    #             batch.policy_batch[idx : min(idx + batch_size, size)],
-    #         )

@@ -3,24 +3,12 @@ from typing import Callable, Dict
 from gym import Env
 import numpy as np
 import torch
-from torch import Tensor
-from torch.functional import F
 from sionpy.config import Config
-from sionpy.mcts import MCTS, Node
 from sionpy.network import ActorCriticModel
-from sionpy.buffer import (
-    Experience,
-    GameHistory,
-    ReplayBuffer,
-    ReplaySample,
-)
-from torch.utils.data import DataLoader
-from torch.utils.data.dataloader import default_collate
+from sionpy.buffer import ReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
 import ray
 from sionpy.self_play import SelfPlay
-
 from sionpy.shared_storage import SharedStorage
 from sionpy.trainer import Trainer
 
@@ -67,7 +55,7 @@ class Sion:
 
         self.replay_buffer_worker = ReplayBuffer.remote(self.checkpoint, self.config)
 
-        self.training_worker = Trainer.options(num_cpus=0, num_gpus=0,).remote(
+        self.training_worker = Trainer.options(num_gpus=1).remote(
             self.checkpoint,
             self.config,
             self.replay_buffer_worker,
@@ -75,7 +63,7 @@ class Sion:
         )
 
         self.self_play_workers = [
-            SelfPlay.options(num_cpus=0, num_gpus=0,).remote(
+            SelfPlay.remote(
                 self.make_env,
                 self.checkpoint,
                 self.replay_buffer_worker,
@@ -93,14 +81,14 @@ class Sion:
 
         self.training_worker.train.remote()
 
-        self.logging_loop(0)
+        self.logging_loop()
 
-    def logging_loop(self, num_gpus):
+    def logging_loop(self):
         """
             Keep track of the training performance.
             """
         # Launch the test worker to get performance metrics
-        test_worker = SelfPlay.options(num_cpus=0, num_gpus=num_gpus,).remote(
+        test_worker = SelfPlay.remote(
             self.make_env,
             self.checkpoint,
             self.replay_buffer_worker,
@@ -118,11 +106,11 @@ class Sion:
         )
 
         # Save hyperparameters to TensorBoard
-        # hp_table = [f"| {key} | {value} |" for key, value in config.__dict__.items()]
-        # writer.add_text(
-        #     "Hyperparameters",
-        #     "| Parameter | Value |\n|-------|-------|\n" + "\n".join(hp_table),
-        # )
+        hp_table = [f"| {key} | {value} |" for key, value in self.config.__dict__.items()]
+        writer.add_text(
+            "Hyperparameters",
+            "| Parameter | Value |\n|-------|-------|\n" + "\n".join(hp_table),
+        )
         # Save model representation
         # writer.add_text(
         #     "Model summary", self.summary,
@@ -193,7 +181,32 @@ class Sion:
         """
         if self.shared_storage_worker:
             self.shared_storage_worker.set_info.remote("terminate", True)
-            # self.checkpoint = ray.get(
-            #     self.shared_storage_worker.get_checkpoint.remote()
-            # )
+            self.checkpoint = ray.get(
+                self.shared_storage_worker.get_checkpoint.remote()
+            )
         print("\nShutting down workers...")
+        
+        self.self_play_workers = None
+        self.test_worker = None
+        self.training_worker = None
+        self.replay_buffer_worker = None
+        self.shared_storage_worker = None
+
+    def test(self, make_env, num_tests=1):
+        self_play_worker = SelfPlay.options(num_cpus=0, num_gpus=1,).remote(
+            make_env,
+            self.checkpoint,
+            None,
+            None,
+            self.config,
+            np.random.randint(10000),
+        )
+        results = []
+        for i in range(num_tests):
+            print(f"Testing {i+1}/{num_tests}")
+            results.append(ray.get(self_play_worker.play_game.remote(0)))
+        #self_play_worker.close_game.remote()
+
+        result = np.mean([sum(history.rewards) for history in results])
+        
+        return result

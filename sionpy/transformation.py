@@ -1,28 +1,29 @@
+import datetime
 from torch import Tensor
-from torch.functional import F
 import torch
+
+DATE = datetime.datetime.now().strftime("%d-%m-%Y--%H-%M-%S")
 
 
 def h_transform(x: Tensor) -> Tensor:
     e = 0.001
-    sign = torch.sign(x).to(x.device)
-    return sign * (torch.sqrt(torch.abs(x) + 1) - 1 + (x * e))
+    return torch.sign(x) * (torch.sqrt(torch.abs(x) + 1) - 1) + e * x
 
 
 def inverse_h_transform(x: Tensor) -> Tensor:
     e = 0.001
-    sign = torch.sign(x).to(x.device)
-    return sign * (
-        torch.pow((torch.sqrt(1 + e * 4 * (torch.abs(x) + 1 + e)) - 1) / (2 * e), 2) - 1
+    return torch.sign(x) * (
+        ((torch.sqrt(1 + 4 * e * (torch.abs(x) + 1 + e)) - 1) / (2 * e)) ** 2 - 1
     )
 
 
 def transform_to_scalar(logits: Tensor, support_size: int) -> Tensor:
-    probs = F.softmax(logits, dim=1)
+    probs = torch.softmax(logits, dim=1)
     support = (
         torch.tensor([x for x in range(-support_size, support_size + 1)])
+        .expand(probs.shape)
         .float()
-        .to(probs.device)
+        .to(device=probs.device)
     )
 
     x = torch.sum(support * probs, dim=1, keepdim=True)

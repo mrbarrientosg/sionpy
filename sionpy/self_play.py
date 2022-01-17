@@ -1,3 +1,4 @@
+import time
 from typing import Callable
 import numpy as np
 import ray
@@ -23,7 +24,7 @@ class SelfPlay:
     ):
         np.random.seed(seed)
         torch.manual_seed(seed)
-        
+
         self.replay_buffer = replay_buffer
         self.shared_storage = shared_storage
         self.config = config
@@ -36,10 +37,12 @@ class SelfPlay:
     def start_playing(self, test_mode: bool = False):
         while ray.get(
             self.shared_storage.get_info.remote("training_step")
-        ) < self.config.steps or not ray.get(
+        ) < self.config.steps and not ray.get(
             self.shared_storage.get_info.remote("terminate")
         ):
-            self.model.load_state_dict(ray.get(self.shared_storage.get_info.remote("weights")))
+            self.model.load_state_dict(
+                ray.get(self.shared_storage.get_info.remote("weights"))
+            )
 
             if not test_mode:
                 game_history = self.play_game(
@@ -79,7 +82,6 @@ class SelfPlay:
                     self.config.simulations,
                     stacked_observations,
                     self.config.action_space,
-                    self.config.device,
                 )
 
                 action = self.select_action(root, temperature)
