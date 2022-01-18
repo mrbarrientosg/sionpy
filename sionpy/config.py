@@ -33,14 +33,14 @@ class Config:
         **kwargs,
     ):
         self.lr = lr
-        self.lr_decay_rate = 0.1  # Set it to 1 to use a constant learning rate
+        self.lr_decay_rate = 0.9  # Set it to 1 to use a constant learning rate
         self.lr_decay_steps = 350e3
 
         self.gpus = gpus
         self.seed = seed
         self.num_workers = num_workers
         self.device = torch.device(device)
-        self.observation_shape = (1, 1, 30)
+        self.observation_shape = (3, 96, 96)
         self.stacked_observations = stacked_observations
         self.batch_size = batch_size
         self.steps = steps
@@ -82,19 +82,19 @@ class Config:
     def add_model_specific_args(parent_parser: ArgumentParser):
         parser = parent_parser.add_argument_group("Sion")
         parser.add_argument("--seed", type=int, default=0)
-        parser.add_argument("--stacked_observations", type=int, default=8)
-        parser.add_argument("--lr", type=float, default=0.05)
+        parser.add_argument("--stacked_observations", type=int, default=32)
+        parser.add_argument("--lr", type=float, default=0.005)
         parser.add_argument("--steps", type=int, default=1e6)
-        parser.add_argument("--batch_size", type=int, default=512)
+        parser.add_argument("--batch_size", type=int, default=1024)
         parser.add_argument("--encoding_size", type=int, default=30)
         parser.add_argument("--max_windows", type=int, default=1e6)
         parser.add_argument("--num_unroll_steps", type=int, default=5)
         parser.add_argument("--td_steps", type=int, default=10)
         parser.add_argument("--max_moves", type=int, default=2500)
-        parser.add_argument("--epsilon_gamma", type=float, default=0.999)
+        parser.add_argument("--epsilon_gamma", type=float, default=0.997)
         parser.add_argument("--checkpoint_interval", type=int, default=500)
         parser.add_argument("--vf_coef", type=float, default=0.25)
-        parser.add_argument("--hidden_nodes", type=int, default=64)
+        parser.add_argument("--hidden_nodes", type=int, default=16)
         parser.add_argument("--support_size", type=int, default=300)
         parser.add_argument("--pb_c_base", type=float, default=19652)
         parser.add_argument("--pb_c_init", type=float, default=1.25)

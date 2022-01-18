@@ -8,9 +8,11 @@ from sionpy.sion import Sion
 from sionpy.transformation import DATE
 from sionpy.wrappers import Game
 from argparse import ArgumentParser
+import cv2
 
 
 ID = "ALE/SpaceInvaders-v5"
+
 
 class CartObservation(gym.ObservationWrapper):
     def __init__(self, env: Env):
@@ -20,16 +22,27 @@ class CartObservation(gym.ObservationWrapper):
         return np.array([[observation]])
 
 
+class ResizeObservation(gym.ObservationWrapper):
+    def __init__(self, env: Env):
+        super().__init__(env)
+
+    def observation(self, observation):
+        observation = cv2.resize(observation, (96, 96), interpolation=cv2.INTER_AREA)
+        observation = np.asarray(observation, dtype="float32") / 255.0
+        observation = np.moveaxis(observation, -1, 0)
+        return observation
+
+
 def make_env(seed):
     env = gym.make(ID, full_action_space=False)
     env.seed(seed)
-    return Game(env)
+    return ResizeObservation(env)
 
 
 def make_env_test(seed):
     env = gym.make(ID, full_action_space=False)
     env.seed(seed)
-    return gym.wrappers.RecordVideo(Game(env), f"video/{ID}/{DATE}")
+    return gym.wrappers.RecordVideo(ResizeObservation(env), f"video/{ID}/{DATE}")
 
 
 if __name__ == "__main__":
