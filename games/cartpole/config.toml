@@ -1,0 +1,41 @@
+game_id = "CartPole-v1"
+seed = 0
+stacked_observations = 0
+action_space = 2
+observation_shape = [1, 1, 4]
+selfplay_on_gpu = false
+
+# learning rate
+lr = 0.02
+lr_decay_rate = 0.9
+lr_decay_steps = 1000
+
+# mcts
+pb_c_init = 1.25
+pb_c_base = 19652
+simulations = 50
+root_dirichlet_alpha = 0.25
+root_exploration_fraction = 0.25
+
+# training
+steps = 1e4
+batch_size = 128
+encoding_size = 8
+max_windows = 500
+num_unroll_steps = 10
+td_steps = 50
+max_moves = 500
+support_size = 10
+
+epsilon_gamma = 0.997
+vf_coef = 1.0
+
+checkpoint_interval = 10
+
+# network
+topology = 1                  # fullyconnected
+fc_representation_layers = []
+fc_dynamics_layers = [64]
+fc_reward_layers = [64, 16]
+fc_policy_layers = [64, 16]
+fc_value_layers = [64, 16]

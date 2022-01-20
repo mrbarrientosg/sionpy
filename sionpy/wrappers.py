@@ -49,6 +49,7 @@ class MaxAndSkipEnv(gym.Wrapper):
     def reset(self, **kwargs):
         return self.env.reset(**kwargs)
 
+
 class ClipRewardEnv(gym.RewardWrapper):
     """
     Clips the reward to {+1, 0, -1} by its sign.
@@ -100,12 +101,6 @@ class NoopResetEnv(gym.Wrapper):
 
 
 class EpisodicLifeEnv(gym.Wrapper):
-    """
-    Make end-of-life == end-of-episode, but only reset on true game over.
-    Done by DeepMind for the DQN and co. since it helps value estimation.
-
-    :param env: the environment to wrap
-    """
 
     def __init__(self, env: gym.Env):
         gym.Wrapper.__init__(self, env)
@@ -122,7 +117,7 @@ class EpisodicLifeEnv(gym.Wrapper):
             # for Qbert sometimes we stay in lives == 0 condtion for a few frames
             # so its important to keep lives > 0, so that we only reset once
             # the environment advertises done.
-            done = True
+            reward -= 100
         self.lives = lives
         return obs, reward, done, info
 
@@ -140,7 +135,6 @@ class RelativeObservation(gym.ObservationWrapper):
     def __init__(self, env, objects):
         super().__init__(env)
         self.objects = objects
-        #self.observation_space = Box(low=-1, high=1, shape=(1, 1, 30), dtype=np.float32)
 
     def observation(self, observation):
         gray = cv2.cvtColor(observation, cv2.COLOR_BGR2GRAY)
@@ -236,85 +230,4 @@ class Game(gym.Wrapper):
                 for i in range(0, 6)
             ],
         )
-        # self.env = FrameStack(self.env, skip_frames)
-        # self.env = FlattenObservation(self.env)
-        self.observation_space = self.env.observation_space
 
-
-# class RelativeObservation(gym.ObservationWrapper):
-#     def __init__(self, env, objects):
-#         super().__init__(env)
-#         self.objects = objects
-#         self.num_envs = 1
-#         self.observation_space = Box(low=-1, high=1, shape=(1, 40), dtype=np.float32)
-
-#     def observation(self, observation):
-#         gray = cv2.cvtColor(observation, cv2.COLOR_BGR2GRAY)
-#         agent_position = self.agent_position(gray, self.objects[0][1])
-#         distances = self.find_objects(gray, agent_position)
-#         obs = np.zeros(1, dtype=np.float64)
-
-#         for (key, value) in distances.items():
-#             if key == "bullet":
-#                 value = np.array(value[0:2])
-#                 if len(value) < 3:
-#                     value = np.pad(
-#                         value, (0, 3 - len(value) % 3), "constant", constant_values=-1.0
-#                     )
-#                 obs = np.append(obs, value)
-
-#             if key == "enemy":
-#                 value = np.array(value)
-#                 if len(value) < 36:
-#                     value = np.pad(
-#                         value,
-#                         (0, 36 - len(value) % 36),
-#                         "constant",
-#                         constant_values=-1.0,
-#                     )
-#                 obs = np.append(obs, value)
-
-#         if len(obs) < 40:
-#             obs = np.pad(obs, (0, 40 - len(obs) % 40), "constant", constant_values=-1.0)
-
-#         return obs
-
-#     def agent_position(self, observation, object):
-#         w, h = object.shape
-
-#         res = cv2.matchTemplate(observation, object, cv2.TM_CCOEFF_NORMED)
-#         threshold = 0.95
-#         loc = np.where(res >= threshold)
-#         for pt in zip(*loc[::-1]):  # Switch collumns and rows
-#             return ((pt[0] + w / 2) / 210, (pt[1] + h / 2) / 160)
-
-#         return None
-
-#     def find_objects(self, observation, agent_center):
-#         distances = {}
-
-#         if agent_center is None:
-#             return distances
-
-#         for object in self.objects:
-#             if object[0] == "agent":
-#                 continue
-
-#             if object[0] not in distances:
-#                 distances[object[0]] = list()
-
-#             template = object[1]
-#             w, h = template.shape
-
-#             res = cv2.matchTemplate(observation, template, cv2.TM_CCOEFF_NORMED)
-#             threshold = 0.95
-#             loc = np.where(res >= threshold)
-#             for pt in zip(*loc[::-1]):  # Switch collumns and rows
-#                 center = ((pt[0] + w / 2) / 210, (pt[1] + h / 2) / 160)
-#                 distances[object[0]].append(
-#                     np.sqrt(
-#                         (center[0] - agent_center[0]) ** 2
-#                         + (center[1] - agent_center[1]) ** 2
-#                     )
-#                 )
-#         return distances

@@ -6,11 +6,11 @@ from sionpy.buffer import ReplayBuffer
 from sionpy.config import Config
 import copy
 from torch import Tensor
-from sionpy.network import ActorCriticModel
+from sionpy.network import SionNetwork
 from sionpy.shared_storage import SharedStorage
 from torch.functional import F
 
-from sionpy.transformation import transform_to_logits
+from sionpy.transformation import dict_to_cpu, transform_to_logits
 
 
 @ray.remote
@@ -30,9 +30,9 @@ class Trainer:
         self.replay_buffer = replay_buffer
         self.shared_storage = shared_storage
 
-        self.model = ActorCriticModel(config)
+        self.model = SionNetwork(config)
         self.model.load_state_dict(copy.deepcopy(initial_checkpoint["weights"]))
-        self.model.to(config.device)
+        self.model.to(torch.device("cuda" if self.config.train_on_gpu else "cpu"))
         self.model.train()
 
         self.training_step = initial_checkpoint["training_step"]
@@ -67,8 +67,8 @@ class Trainer:
             if self.training_step % self.config.checkpoint_interval == 0:
                 self.shared_storage.set_info.remote(
                     {
-                        "weights": self.model.state_dict(),
-                        "optimizer_state": self.optimizer.state_dict(),
+                        "weights": copy.deepcopy(dict_to_cpu(self.model.state_dict())),
+                        "optimizer_state": copy.deepcopy(dict_to_cpu(self.optimizer.state_dict())),
                     }
                 )
 
@@ -84,6 +84,18 @@ class Trainer:
                     "policy_loss": policy_loss,
                 }
             )
+            
+            if self.config.ratio:
+                while (
+                    self.training_step
+                    / max(
+                        1, ray.get(self.shared_storage.get_info.remote("num_played_steps"))
+                    )
+                    > self.config.ratio
+                    and self.training_step < self.config.steps
+                    and not ray.get(self.shared_storage.get_info.remote("terminate"))
+                ):
+                    time.sleep(0.5)
 
     def initial_mse(
         self, value, policy_logits, target_value, target_policy,

@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import math
 from sionpy.config import Config
-from sionpy.network import ActorCriticModel
+from sionpy.network import AbstractNetwork, SionNetwork
 from sionpy.transformation import transform_to_scalar
 
 
@@ -68,7 +68,14 @@ class MCTS:
     def __init__(self, config: Config):
         self.config = config
 
-    def run(self, model: ActorCriticModel, simulations: int, observation, actions):
+    def run(
+        self,
+        model: AbstractNetwork,
+        simulations: int,
+        observation,
+        actions,
+        add_exploration_noise=True,
+    ):
         min_max_stats = MinMaxStats()
         root = Node(0)
 
@@ -94,9 +101,11 @@ class MCTS:
 
         root.expand(actions, reward, policy_logits, encoded_state)
 
-        root.add_exploration_noise(
-            dirichlet_alpha=0.25, exploration_fraction=0.25,
-        )
+        if add_exploration_noise:
+            root.add_exploration_noise(
+                dirichlet_alpha=self.config.root_dirichlet_alpha,
+                exploration_fraction=self.config.root_exploration_fraction,
+            )
 
         max_tree_depth = 0
         for _ in range(simulations):

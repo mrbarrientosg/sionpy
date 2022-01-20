@@ -9,7 +9,7 @@
             "type": "python",
             "request": "launch",
             "module": "sionpy",
-            "args": ["--gpus", "1", "--num_workers", "1", "--device", "cuda"]
+            "args": ["--game", "space_invaders"]
         }
     ]
 }

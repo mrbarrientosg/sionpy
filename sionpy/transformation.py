@@ -4,6 +4,16 @@ import torch
 
 DATE = datetime.datetime.now().strftime("%d-%m-%Y--%H-%M-%S")
 
+def dict_to_cpu(dictionary):
+    cpu_dict = {}
+    for key, value in dictionary.items():
+        if isinstance(value, torch.Tensor):
+            cpu_dict[key] = value.cpu()
+        elif isinstance(value, dict):
+            cpu_dict[key] = dict_to_cpu(value)
+        else:
+            cpu_dict[key] = value
+    return cpu_dict
 
 def h_transform(x: Tensor) -> Tensor:
     e = 0.001

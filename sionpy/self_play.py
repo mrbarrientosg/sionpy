@@ -7,7 +7,7 @@ import torch
 from sionpy.buffer import Experience, GameHistory, ReplayBuffer
 from sionpy.config import Config
 from sionpy.mcts import MCTS, Node
-from sionpy.network import ActorCriticModel
+from sionpy.network import SionNetwork
 from sionpy.shared_storage import SharedStorage
 
 
@@ -15,7 +15,7 @@ from sionpy.shared_storage import SharedStorage
 class SelfPlay:
     def __init__(
         self,
-        make_env: Callable[[int], Env],
+        make_env: Callable[[str, str, int], Env],
         initial_checkpoint,
         replay_buffer: ReplayBuffer,
         shared_storage: SharedStorage,
@@ -28,10 +28,10 @@ class SelfPlay:
         self.replay_buffer = replay_buffer
         self.shared_storage = shared_storage
         self.config = config
-        self.env = make_env(seed)
-        self.model = ActorCriticModel(config)
+        self.env = make_env(config.game_id, config.log_dir, seed)
+        self.model = SionNetwork(config)
         self.model.load_state_dict(initial_checkpoint["weights"])
-        self.model.to(config.device)
+        self.model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         self.model.eval()
 
     def start_playing(self, test_mode: bool = False):
@@ -65,6 +65,22 @@ class SelfPlay:
                     }
                 )
 
+            if not test_mode and self.config.ratio:
+                while (
+                    ray.get(self.shared_storage.get_info.remote("training_step"))
+                    / max(
+                        1,
+                        ray.get(
+                            self.shared_storage.get_info.remote("num_played_steps")
+                        ),
+                    )
+                    < self.config.ratio
+                    and ray.get(self.shared_storage.get_info.remote("training_step"))
+                    < self.config.steps
+                    and not ray.get(self.shared_storage.get_info.remote("terminate"))
+                ):
+                    time.sleep(0.5)
+
         self.env.close()
 
     def play_game(self, temperature: float) -> GameHistory:
@@ -94,13 +110,16 @@ class SelfPlay:
         return game_history
 
     def select_action(self, node: Node, temperature: float = 1.0):
-        visit_counts = np.array([child.visit_count for child in node.children.values()])
+        visit_counts = np.array(
+            [child.visit_count for child in node.children.values()], dtype="int32"
+        )
         actions = [action for action in node.children.keys()]
-        if temperature == 0.0:
+        if temperature == 0:
             action = actions[np.argmax(visit_counts)]
         elif temperature == float("inf"):
             action = np.random.choice(actions)
         else:
+            # See paper appendix Data Generation
             visit_count_distribution = visit_counts ** (1 / temperature)
             visit_count_distribution = visit_count_distribution / sum(
                 visit_count_distribution

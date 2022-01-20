@@ -1,4 +1,5 @@
 from collections import namedtuple
+import copy
 from typing import List
 import numpy as np
 import ray
@@ -90,10 +91,10 @@ class GameHistory:
 @ray.remote
 class ReplayBuffer:
     def __init__(
-        self, initial_checkpoint, config: Config,
+        self, initial_checkpoint, buffer, config: Config,
     ):
         self.config = config
-        self.game_histories: List[GameHistory] = []
+        self.game_histories: List[GameHistory] = copy.deepcopy(buffer)
         self.max_windows = config.max_windows
         self.num_unroll_steps = config.num_unroll_steps
         self.td_steps = config.td_steps
@@ -116,6 +117,9 @@ class ReplayBuffer:
             shared_storage.set_info.remote("num_played_games", self.num_played_games)
             shared_storage.set_info.remote("num_played_steps", self.num_played_steps)
 
+    def get_buffer(self):
+        return self.game_histories
+    
     def sample(self, batch_size: int) -> ReplaySample:
         (
             observation_batch,
@@ -201,6 +205,6 @@ class ReplayBuffer:
             game_history.rewards[index + 1 : bootstrap_index + 1]
         ):
             # The value is oriented from the perspective of the current player
-            value += reward * (self.gamma ** i)
+            value += reward * self.gamma ** i
 
         return value

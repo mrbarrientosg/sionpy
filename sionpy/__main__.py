@@ -1,58 +1,39 @@
+from ast import arg
 import datetime
+import importlib
+import os
 import gym
 from gym import Env
 import numpy as np
 from gym.spaces import Box
 from sionpy.config import Config
+from sionpy.network import SionNetwork
 from sionpy.sion import Sion
-from sionpy.transformation import DATE
 from sionpy.wrappers import Game
 from argparse import ArgumentParser
-import cv2
-
-
-ID = "ALE/SpaceInvaders-v5"
-
-
-class CartObservation(gym.ObservationWrapper):
-    def __init__(self, env: Env):
-        super().__init__(env)
-
-    def observation(self, observation):
-        return np.array([[observation]])
-
-
-class ResizeObservation(gym.ObservationWrapper):
-    def __init__(self, env: Env):
-        super().__init__(env)
-
-    def observation(self, observation):
-        observation = cv2.resize(observation, (96, 96), interpolation=cv2.INTER_AREA)
-        observation = np.asarray(observation, dtype="float32") / 255.0
-        observation = np.moveaxis(observation, -1, 0)
-        return observation
-
-
-def make_env(seed):
-    env = gym.make(ID, full_action_space=False)
-    env.seed(seed)
-    return ResizeObservation(env)
-
-
-def make_env_test(seed):
-    env = gym.make(ID, full_action_space=False)
-    env.seed(seed)
-    return gym.wrappers.RecordVideo(ResizeObservation(env), f"video/{ID}/{DATE}")
+import toml
+from torchinfo import summary
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser = Config.add_model_specific_args(parser)
+    parser.add_argument(
+        "--game",
+        type=str,
+        choices=os.listdir("./games"),
+        help="Choose one game.",
+        required=True,
+    )
+    parser.add_argument("--gpus", type=int, default=0)
+    parser.add_argument("--num_workers", type=int, default=1)
     args = parser.parse_args()
-    dict_args = vars(args)
 
-    config = Config(ID, **dict_args)
+    game_config = toml.load(os.path.join("games", args.game, "config.toml"))
 
-    sion = Sion(config, make_env)
+    config = Config(**game_config)
+    config.gpus = args.gpus
+    config.num_workers = args.num_workers
+
+    sion = Sion(config, args.game)
     sion.train()
-    print(sion.test(make_env_test, 10))
+    print(sion.test(num_tests=10))

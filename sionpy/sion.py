@@ -1,22 +1,29 @@
+import copy
+import importlib
+import math
+import os
+import pickle
 import time
 from typing import Callable, Dict
 from gym import Env
 import numpy as np
 import torch
 from sionpy.config import Config
-from sionpy.network import ActorCriticModel
+from sionpy.network import SionNetwork
 from sionpy.buffer import ReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 import ray
 from sionpy.self_play import SelfPlay
 from sionpy.shared_storage import SharedStorage
 from sionpy.trainer import Trainer
-
+from sionpy.transformation import dict_to_cpu
+from torchinfo import summary
 
 class Sion:
-    def __init__(self, config: Config, make_env: Callable[[int], Env]):
+    def __init__(self, config: Config, game: str):
         self.config = config
-        self.make_env = make_env
+        self.game_module = importlib.import_module("games." + game + ".game")
+        self.make_env = self.game_module.make_game
 
         np.random.seed(self.config.seed)
         torch.manual_seed(self.config.seed)
@@ -40,22 +47,68 @@ class Sion:
             "lr": 0,
         }
 
-        self.replay_buffer = {}
+        self.replay_buffer = []
 
-        self.checkpoint["weights"] = ActorCriticModel(config).state_dict()
+        model = SionNetwork(config)
+        self.summary = str(model).replace("\n", " \n\n")
+        self.checkpoint["weights"] = copy.deepcopy(dict_to_cpu(model.state_dict()))
 
         self.self_play_workers = None
         self.training_worker = None
         self.replay_buffer_worker = None
         self.shared_storage_worker = None
 
+    def load_model(self, checkpoint_path=None, replay_buffer_path=None):
+        """
+        Load a model and/or a saved replay buffer.
+        Args:
+            checkpoint_path (str): Path to model.checkpoint or model.weights.
+            replay_buffer_path (str): Path to replay_buffer.pkl
+        """
+        # Load checkpoint
+        if checkpoint_path:
+            if os.path.exists(checkpoint_path):
+                self.checkpoint = torch.load(checkpoint_path)
+
+        # Load replay buffer
+        if replay_buffer_path:
+            if os.path.exists(replay_buffer_path):
+                with open(replay_buffer_path, "rb") as f:
+                    replay_buffer_infos = pickle.load(f)
+                self.replay_buffer = replay_buffer_infos["buffer"]
+                self.checkpoint["num_played_steps"] = replay_buffer_infos[
+                    "num_played_steps"
+                ]
+                self.checkpoint["num_played_games"] = replay_buffer_infos[
+                    "num_played_games"
+                ]
+            else:
+                self.checkpoint["training_step"] = 0
+                self.checkpoint["num_played_steps"] = 0
+                self.checkpoint["num_played_games"] = 0
+
     def train(self):
+        if 0 < self.config.gpus:
+            num_gpus_per_worker = self.config.gpus / (
+                self.config.train_on_gpu
+                + self.config.num_workers * self.config.selfplay_on_gpu
+                + 1 * self.config.selfplay_on_gpu
+            )
+            if 1 < num_gpus_per_worker:
+                num_gpus_per_worker = math.floor(num_gpus_per_worker)
+        else:
+            num_gpus_per_worker = 0
+
         self.shared_storage_worker = SharedStorage.remote(self.checkpoint, self.config,)
         self.shared_storage_worker.set_info.remote("terminate", False)
 
-        self.replay_buffer_worker = ReplayBuffer.remote(self.checkpoint, self.config)
+        self.replay_buffer_worker = ReplayBuffer.remote(
+            self.checkpoint, self.replay_buffer, self.config
+        )
 
-        self.training_worker = Trainer.options(num_gpus=1).remote(
+        self.training_worker = Trainer.options(
+            num_cpus=0, num_gpus=num_gpus_per_worker if self.config.train_on_gpu else 0
+        ).remote(
             self.checkpoint,
             self.config,
             self.replay_buffer_worker,
@@ -63,7 +116,10 @@ class Sion:
         )
 
         self.self_play_workers = [
-            SelfPlay.remote(
+            SelfPlay.options(
+                num_cpus=0,
+                num_gpus=num_gpus_per_worker if self.config.selfplay_on_gpu else 0,
+            ).remote(
                 self.make_env,
                 self.checkpoint,
                 self.replay_buffer_worker,
@@ -81,14 +137,14 @@ class Sion:
 
         self.training_worker.train.remote()
 
-        self.logging_loop()
+        self.logging_loop(num_gpus_per_worker if self.config.selfplay_on_gpu else 0)
 
-    def logging_loop(self):
+    def logging_loop(self, gpus):
         """
             Keep track of the training performance.
             """
         # Launch the test worker to get performance metrics
-        test_worker = SelfPlay.remote(
+        test_worker = SelfPlay.options(num_cpus=0, num_gpus=gpus).remote(
             self.make_env,
             self.checkpoint,
             self.replay_buffer_worker,
@@ -106,15 +162,16 @@ class Sion:
         )
 
         # Save hyperparameters to TensorBoard
-        hp_table = [f"| {key} | {value} |" for key, value in self.config.__dict__.items()]
+        hp_table = [
+            f"| {key} | {value} |" for key, value in self.config.__dict__.items()
+        ]
         writer.add_text(
             "Hyperparameters",
             "| Parameter | Value |\n|-------|-------|\n" + "\n".join(hp_table),
         )
-        # Save model representation
-        # writer.add_text(
-        #     "Model summary", self.summary,
-        # )
+        writer.add_text(
+            "Model summary", self.summary,
+        )
         # Loop for updating the training performance
         counter = 0
         keys = [
@@ -175,26 +232,36 @@ class Sion:
 
         self.terminate_workers()
 
+        pickle.dump(
+            {
+                "buffer": self.replay_buffer,
+                "num_played_games": self.checkpoint["num_played_games"],
+                "num_played_steps": self.checkpoint["num_played_steps"],
+            },
+            open(os.path.join(self.config.log_dir, "replay_buffer.pkl"), "wb"),
+        )
+
     def terminate_workers(self):
         """
         Softly terminate the running tasks and garbage collect the workers.
         """
-        if self.shared_storage_worker:
-            self.shared_storage_worker.set_info.remote("terminate", True)
-            self.checkpoint = ray.get(
-                self.shared_storage_worker.get_checkpoint.remote()
-            )
+        self.shared_storage_worker.set_info.remote("terminate", True)
+        self.checkpoint = ray.get(self.shared_storage_worker.get_checkpoint.remote())
+
+        if self.replay_buffer_worker:
+            self.replay_buffer = ray.get(self.replay_buffer_worker.get_buffer.remote())
+
         print("\nShutting down workers...")
-        
+
         self.self_play_workers = None
         self.test_worker = None
         self.training_worker = None
         self.replay_buffer_worker = None
         self.shared_storage_worker = None
 
-    def test(self, make_env, num_tests=1):
-        self_play_worker = SelfPlay.options(num_cpus=0, num_gpus=1,).remote(
-            make_env,
+    def test(self, num_tests=1):
+        self_play_worker = SelfPlay.remote(
+            self.game_module.make_game_test,
             self.checkpoint,
             None,
             None,
@@ -205,8 +272,8 @@ class Sion:
         for i in range(num_tests):
             print(f"Testing {i+1}/{num_tests}")
             results.append(ray.get(self_play_worker.play_game.remote(0)))
-        #self_play_worker.close_game.remote()
+        # self_play_worker.close_game.remote()
 
         result = np.mean([sum(history.rewards) for history in results])
-        
+
         return result

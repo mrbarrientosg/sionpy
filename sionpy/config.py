@@ -1,106 +1,110 @@
 from argparse import ArgumentParser
 import os
+from typing import List, Tuple
+import gym
 import torch
 from sionpy.transformation import DATE
+from enum import IntEnum
+
+
+class NetworkTopology(IntEnum):
+    FULLY = 1
+    RESNET = 2
 
 
 class Config:
     def __init__(
         self,
-        game_id: str,
+        game_id: str = None,
         seed: int = 0,
         stacked_observations: int = 16,
-        lr: float = 0.005,
-        steps: int = 1e6,
-        batch_size: int = 1024,
-        encoding_size: int = 30,
-        max_windows: int = 1e6,
-        num_unroll_steps: int = 5,
-        td_steps: int = 10,
-        max_moves: int = 27000,
-        epsilon_gamma: float = 0.997,
-        checkpoint_interval: int = 500,
-        vf_coef: float = 0.25,
-        hidden_nodes: int = 64,
-        support_size: int = 300,
-        pb_c_base: float = 19652,
+        action_space: int = 0,
+        observation_shape: Tuple[int, int, int] = (1, 1, 1),
+        selfplay_on_gpu: bool = False,
+        lr: float = 0.02,
+        lr_decay_rate: float = 0.9,
+        lr_decay_steps: int = 1000,
         pb_c_init: float = 1.25,
-        simulations: int = 30,
-        device: str = "cpu",
-        gpus: int = 0,
+        pb_c_base: float = 19652,
+        simulations: int = 50,
+        root_dirichlet_alpha: float = 0.25,
+        root_exploration_fraction: float = 0.25,
+        steps: int = 1e4,
+        batch_size: int = 128,
+        encoding_size: int = 8,
+        max_windows: int = 500,
+        num_unroll_steps: int = 10,
+        td_steps: int = 50,
+        max_moves: int = 500,
+        support_size: int = 10,
+        epsilon_gamma: float = 0.997,
+        checkpoint_interval: int = 10,
+        vf_coef: float = 1.0,
+        topology: NetworkTopology = NetworkTopology.FULLY,
+        fc_representation_layers: List[int] = [],
+        fc_dynamics_layers: List[int] = [16],
+        fc_reward_layers: List[int] = [16],
+        fc_policy_layers: List[int] = [16],
+        fc_value_layers: List[int] = [16],
+        ratio: int = None,
         num_workers: int = 1,
+        gpus: int = 0,
         log_dir: str = None,
         **kwargs,
     ):
-        self.lr = lr
-        self.lr_decay_rate = 0.9  # Set it to 1 to use a constant learning rate
-        self.lr_decay_steps = 350e3
-
-        self.gpus = gpus
+        self.game_id = game_id
         self.seed = seed
-        self.num_workers = num_workers
-        self.device = torch.device(device)
-        self.observation_shape = (3, 96, 96)
         self.stacked_observations = stacked_observations
-        self.batch_size = batch_size
-        self.steps = steps
-        self.epsilon_gamma = epsilon_gamma
-        self.vf_coef = vf_coef
+        self.action_space = list(range(action_space))
+        self.observation_shape = observation_shape
+        self.selfplay_on_gpu = selfplay_on_gpu
+
+        self.lr = lr
+        self.lr_decay_rate = lr_decay_rate
+        self.lr_decay_steps = lr_decay_steps
+
         self.pb_c_init = pb_c_init
         self.pb_c_base = pb_c_base
         self.simulations = simulations
-        self.action_space = list(range(6))
+        self.root_dirichlet_alpha = root_dirichlet_alpha
+        self.root_exploration_fraction = root_exploration_fraction
 
-        self.max_moves = max_moves
+        self.steps = steps
+        self.batch_size = batch_size
         self.encoding_size = encoding_size
         self.max_windows = max_windows
         self.num_unroll_steps = num_unroll_steps
         self.td_steps = td_steps
-        self.checkpoint_interval = checkpoint_interval
-        self.hidden_nodes = hidden_nodes
+        self.max_moves = max_moves
         self.support_size = support_size
+
+        self.epsilon_gamma = epsilon_gamma
+        self.vf_coef = vf_coef
+
+        self.checkpoint_interval = checkpoint_interval
+
+        self.topology = topology
+        self.fc_representation_layers = fc_representation_layers
+        self.fc_dynamics_layers = fc_dynamics_layers
+        self.fc_reward_layers = fc_reward_layers
+        self.fc_policy_layers = fc_policy_layers
+        self.fc_value_layers = fc_value_layers
+
+        self.num_workers = num_workers
+        self.gpus = gpus
+        
+        self.train_on_gpu = torch.cuda.is_available() 
+        
+        self.ratio = ratio
 
         if log_dir is None:
             log_dir = os.path.join("results", game_id, DATE,)
         self.log_dir = log_dir
 
     def visit_softmax_temperature_fn(self, trained_steps):
-        """
-        Parameter to alter the visit count distribution to ensure that the action selection becomes greedier as training progresses.
-        The smaller it is, the more likely the best action (ie with the highest visit count) is chosen.
-        Returns:
-            Positive float.
-        """
         if trained_steps < 0.5 * self.steps:
             return 1.0
         elif trained_steps < 0.75 * self.steps:
             return 0.5
         else:
             return 0.25
-
-    @staticmethod
-    def add_model_specific_args(parent_parser: ArgumentParser):
-        parser = parent_parser.add_argument_group("Sion")
-        parser.add_argument("--seed", type=int, default=0)
-        parser.add_argument("--stacked_observations", type=int, default=32)
-        parser.add_argument("--lr", type=float, default=0.005)
-        parser.add_argument("--steps", type=int, default=1e6)
-        parser.add_argument("--batch_size", type=int, default=1024)
-        parser.add_argument("--encoding_size", type=int, default=30)
-        parser.add_argument("--max_windows", type=int, default=1e6)
-        parser.add_argument("--num_unroll_steps", type=int, default=5)
-        parser.add_argument("--td_steps", type=int, default=10)
-        parser.add_argument("--max_moves", type=int, default=2500)
-        parser.add_argument("--epsilon_gamma", type=float, default=0.997)
-        parser.add_argument("--checkpoint_interval", type=int, default=500)
-        parser.add_argument("--vf_coef", type=float, default=0.25)
-        parser.add_argument("--hidden_nodes", type=int, default=16)
-        parser.add_argument("--support_size", type=int, default=300)
-        parser.add_argument("--pb_c_base", type=float, default=19652)
-        parser.add_argument("--pb_c_init", type=float, default=1.25)
-        parser.add_argument("--simulations", type=int, default=50)
-        parser.add_argument("--device", type=str, default="cpu")
-        parser.add_argument("--gpus", type=int, default=0)
-        parser.add_argument("--num_workers", type=int, default=1)
-        parser.add_argument("--log_dir", type=str, default=None)
-        return parent_parser
