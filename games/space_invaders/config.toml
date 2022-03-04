@@ -1,0 +1,47 @@
+game_id = "ALE/SpaceInvaders-v5"
+seed = 0
+stacked_observations = 4
+action_space = 6
+observation_shape = [1, 1, 30]
+selfplay_on_gpu = false
+
+# learning rate
+lr = 0.05
+lr_decay_rate = 0.1
+lr_decay_steps = 350e3
+
+# mcts
+pb_c_init = 1.25
+pb_c_base = 19652
+simulations = 50
+root_dirichlet_alpha = 0.25
+root_exploration_fraction = 0.25
+
+# training
+steps = 1e6
+batch_size = 1024
+encoding_size = 32
+max_windows = 1e6
+num_unroll_steps = 5
+td_steps = 10
+max_moves = 27000
+support_size = 300
+
+epsilon_gamma = 0.997
+vf_coef = 0.25
+
+checkpoint_interval = 1000
+
+# network
+topology = 1                  # fullyconnected
+fc_representation_layers = []
+fc_dynamics_layers = []
+fc_reward_layers = [16]
+fc_policy_layers = [16]
+fc_value_layers = [16]
+
+# parametro que indica la cantidad de training respecto a la cantidad de pasos jugados
+# basicamente no va a entrenar si no hay una cantidad de pasos jugados que supere el ratio
+# ratio = 1
+nb_games_first = 1
+log_dir = "results/SpaceInvaders/exp2"

@@ -9,7 +9,7 @@
             "type": "python",
             "request": "launch",
             "module": "sionpy",
-            "args": ["--num_processes", "4", "--num_workers", "4", "--batch_size", "16", "--max_moves", "50", "--max_epochs", "10"]
+            "args": ["--game", "space_invaders"]
         }
     ]
 }
