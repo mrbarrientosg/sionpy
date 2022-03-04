@@ -19,7 +19,6 @@ class MinMaxStats(object):
 
     def normalize(self, value: float) -> float:
         if self.maximum > self.minimum:
-            # We normalize only when we have set the maximum and minimum values.
             return (value - self.minimum) / (self.maximum - self.minimum)
         return value
 
@@ -52,11 +51,9 @@ class Node:
         for action, p in policy.items():
             self.children[action] = Node(p)
 
-    def add_exploration_noise(self, dirichlet_alpha, exploration_fraction):
-        """
-        At the start of each search, we add dirichlet noise to the prior of the root to
-        encourage the search to explore new actions.
-        """
+    def add_exploration_noise(
+        self, dirichlet_alpha: float, exploration_fraction: float
+    ):
         actions = list(self.children.keys())
         noise = np.random.dirichlet([dirichlet_alpha] * len(actions))
         frac = exploration_fraction
@@ -143,20 +140,13 @@ class MCTS:
         )
 
     def select_child(self, node: Node, min_max_stats: MinMaxStats):
-        max_ucb = max(
-            self.ucb_score(node, child, min_max_stats)
+        _, action, child = max(
+            (self.ucb_score(node, child, min_max_stats), action, child)
             for action, child in node.children.items()
         )
-        action = np.random.choice(
-            [
-                action
-                for action, child in node.children.items()
-                if self.ucb_score(node, child, min_max_stats) == max_ucb
-            ]
-        )
-        return action, node.children[action]
+        return action, child
 
-    def backpropagate(self, search_path, value, min_max_stats: MinMaxStats):
+    def backpropagate(self, search_path, value: float, min_max_stats: MinMaxStats):
         for node in reversed(search_path):
             node.value_sum += value
             node.visit_count += 1
@@ -174,13 +164,10 @@ class MCTS:
         pb_c *= math.sqrt(parent.visit_count) / (child.visit_count + 1)
 
         prior_score = pb_c * child.prior
-
         if child.visit_count > 0:
-            # Mean value Q
             value_score = min_max_stats.normalize(
                 child.reward + self.config.epsilon_gamma * child.value()
             )
         else:
             value_score = 0
-
         return prior_score + value_score

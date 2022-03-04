@@ -24,6 +24,7 @@ class SelfPlay:
     ):
         np.random.seed(seed)
         torch.manual_seed(seed)
+        np.set_printoptions(linewidth=160)
 
         self.replay_buffer = replay_buffer
         self.shared_storage = shared_storage
@@ -35,6 +36,10 @@ class SelfPlay:
         self.model.eval()
 
     def start_playing(self, test_mode: bool = False):
+        if test_mode:
+            while self.config.nb_games_first > ray.get(self.shared_storage.get_info.remote("num_played_games")):
+                time.sleep(0.1)
+            
         while ray.get(
             self.shared_storage.get_info.remote("training_step")
         ) < self.config.steps and not ray.get(
@@ -65,7 +70,7 @@ class SelfPlay:
                     }
                 )
 
-            if not test_mode and self.config.ratio:
+            if not test_mode and self.config.ratio and self.config.nb_games_first < ray.get(self.shared_storage.get_info.remote("num_played_games")):
                 while (
                     ray.get(self.shared_storage.get_info.remote("training_step"))
                     / max(
@@ -89,7 +94,7 @@ class SelfPlay:
         game_history.add(Experience(observation, 0, 0))
 
         done = False
-
+                
         with torch.no_grad():
             while not done and len(game_history.actions) <= self.config.max_moves:
                 stacked_observations = game_history.get_stacked_observations(-1)
@@ -119,7 +124,6 @@ class SelfPlay:
         elif temperature == float("inf"):
             action = np.random.choice(actions)
         else:
-            # See paper appendix Data Generation
             visit_count_distribution = visit_counts ** (1 / temperature)
             visit_count_distribution = visit_count_distribution / sum(
                 visit_count_distribution
@@ -128,3 +132,5 @@ class SelfPlay:
 
         return action
 
+    def close(self):
+        self.env.close()

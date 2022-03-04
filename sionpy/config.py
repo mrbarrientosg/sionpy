@@ -1,7 +1,6 @@
 from argparse import ArgumentParser
 import os
 from typing import List, Tuple
-import gym
 import torch
 from sionpy.transformation import DATE
 from enum import IntEnum
@@ -47,6 +46,7 @@ class Config:
         fc_policy_layers: List[int] = [16],
         fc_value_layers: List[int] = [16],
         ratio: int = None,
+        nb_games_first: int = 1,
         num_workers: int = 1,
         gpus: int = 0,
         log_dir: str = None,
@@ -96,7 +96,8 @@ class Config:
         self.train_on_gpu = torch.cuda.is_available() 
         
         self.ratio = ratio
-
+        self.nb_games_first = nb_games_first
+        
         if log_dir is None:
             log_dir = os.path.join("results", game_id, DATE,)
         self.log_dir = log_dir

@@ -10,14 +10,6 @@ from sionpy.shared_storage import SharedStorage
 Experience = namedtuple("Experience", field_names=["observation", "action", "reward"],)
 
 
-# class ReplaySample(NamedTuple):
-#     observation_batch
-#     action_batch
-#     value_batch
-#     reward_batch
-#     policy_batch
-
-
 ReplaySample = namedtuple(
     "ReplaySample",
     field_names=[
@@ -55,6 +47,7 @@ class GameHistory:
         )
 
         self.root_values.append(root.value())
+        
 
     def get_stacked_observations(self, index: int) -> np.ndarray:
         index = index % len(self.observations)
@@ -119,7 +112,7 @@ class ReplayBuffer:
 
     def get_buffer(self):
         return self.game_histories
-    
+
     def sample(self, batch_size: int) -> ReplaySample:
         (
             observation_batch,
@@ -175,7 +168,7 @@ class ReplayBuffer:
                 # Uniform policy
                 target_policies.append(
                     [
-                        1 / len(game_history.child_visits[0])
+                        0
                         for _ in range(len(game_history.child_visits[0]))
                     ]
                 )
@@ -194,16 +187,13 @@ class ReplayBuffer:
         # future, plus the discounted sum of all rewards until then.
         bootstrap_index = index + self.td_steps
         if bootstrap_index < len(game_history.root_values):
-            root_values = game_history.root_values
-            last_step_value = root_values[bootstrap_index]
-
-            value = last_step_value * self.gamma ** self.td_steps
+            value = (
+                game_history.root_values[bootstrap_index] * self.gamma ** self.td_steps
+            )
         else:
             value = 0
 
-        for i, reward in enumerate(
-            game_history.rewards[index + 1 : bootstrap_index + 1]
-        ):
+        for i, reward in enumerate(game_history.rewards[index:bootstrap_index]):
             # The value is oriented from the perspective of the current player
             value += reward * self.gamma ** i
 

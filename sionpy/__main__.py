@@ -6,13 +6,13 @@ import gym
 from gym import Env
 import numpy as np
 from gym.spaces import Box
+import torch
 from sionpy.config import Config
 from sionpy.network import SionNetwork
 from sionpy.sion import Sion
 from sionpy.wrappers import Game
 from argparse import ArgumentParser
 import toml
-from torchinfo import summary
 
 
 if __name__ == "__main__":
@@ -32,8 +32,12 @@ if __name__ == "__main__":
 
     config = Config(**game_config)
     config.gpus = args.gpus
-    config.num_workers = args.num_workers
+    config.num_workers = args.num_workers    
 
     sion = Sion(config, args.game)
-    sion.train()
+    sion.load_model(
+        replay_buffer_path="C:\\Users\\Matias\\Documents\\practica\\sionpy\\results\\SpaceInvaders\\exp2\\replay_buffer.pkl",
+        checkpoint_path="C:\\Users\\Matias\\Documents\\practica\\sionpy\\results\\SpaceInvaders\\exp2\\model.checkpoint",
+    )
+    #sion.train()
     print(sion.test(num_tests=10))

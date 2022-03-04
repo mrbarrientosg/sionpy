@@ -33,9 +33,11 @@ vf_coef = 1.0
 checkpoint_interval = 10
 
 # network
-topology = 1                  # fullyconnected
+topology = 1                  
 fc_representation_layers = []
-fc_dynamics_layers = [64]
-fc_reward_layers = [64, 16]
-fc_policy_layers = [64, 16]
-fc_value_layers = [64, 16]
+fc_dynamics_layers = [16]
+fc_reward_layers = [16]
+fc_policy_layers = [16]
+fc_value_layers = [16]
+
+ratio = 1.5

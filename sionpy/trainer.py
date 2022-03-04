@@ -9,7 +9,6 @@ from torch import Tensor
 from sionpy.network import SionNetwork
 from sionpy.shared_storage import SharedStorage
 from torch.functional import F
-
 from sionpy.transformation import dict_to_cpu, transform_to_logits
 
 
@@ -48,6 +47,9 @@ class Trainer:
 
     def train(self):
         while ray.get(self.shared_storage.get_info.remote("num_played_games")) < 1:
+            time.sleep(0.1)
+            
+        while self.config.nb_games_first > ray.get(self.shared_storage.get_info.remote("num_played_games")):
             time.sleep(0.1)
 
         next_batch = self.replay_buffer.sample.remote(self.config.batch_size)
@@ -149,7 +151,7 @@ class Trainer:
                 policy_logits,
                 encoded_state,
             ) = self.model.recurrent_inference(encoded_state, action_batch[:, i])
-            # Scale the gradient at the start of the dynamics function (See paper appendix Training)
+
             encoded_state.register_hook(lambda grad: grad * 0.5)
             predictions.append((value, reward, policy_logits))
 
@@ -178,7 +180,6 @@ class Trainer:
                 target_policy[:, i],
             )
 
-            # Scale gradient by the number of unroll steps (See paper appendix Training)
             current_value_loss.register_hook(
                 lambda grad: grad / gradient_scale_batch[:, i]
             )
@@ -209,9 +210,6 @@ class Trainer:
         )
 
     def update_lr(self):
-        """
-        Update learning rate
-        """
         lr = self.config.lr * self.config.lr_decay_rate ** (
             self.training_step / self.config.lr_decay_steps
         )

@@ -17,7 +17,7 @@ from sionpy.self_play import SelfPlay
 from sionpy.shared_storage import SharedStorage
 from sionpy.trainer import Trainer
 from sionpy.transformation import dict_to_cpu
-from torchinfo import summary
+
 
 class Sion:
     def __init__(self, config: Config, game: str):
@@ -45,6 +45,7 @@ class Sion:
             "optimizer_state": None,
             "terminate": False,
             "lr": 0,
+            "counter": 0,
         }
 
         self.replay_buffer = []
@@ -59,18 +60,10 @@ class Sion:
         self.shared_storage_worker = None
 
     def load_model(self, checkpoint_path=None, replay_buffer_path=None):
-        """
-        Load a model and/or a saved replay buffer.
-        Args:
-            checkpoint_path (str): Path to model.checkpoint or model.weights.
-            replay_buffer_path (str): Path to replay_buffer.pkl
-        """
-        # Load checkpoint
         if checkpoint_path:
             if os.path.exists(checkpoint_path):
                 self.checkpoint = torch.load(checkpoint_path)
 
-        # Load replay buffer
         if replay_buffer_path:
             if os.path.exists(replay_buffer_path):
                 with open(replay_buffer_path, "rb") as f:
@@ -140,10 +133,6 @@ class Sion:
         self.logging_loop(num_gpus_per_worker if self.config.selfplay_on_gpu else 0)
 
     def logging_loop(self, gpus):
-        """
-            Keep track of the training performance.
-            """
-        # Launch the test worker to get performance metrics
         test_worker = SelfPlay.options(num_cpus=0, num_gpus=gpus).remote(
             self.make_env,
             self.checkpoint,
@@ -154,14 +143,12 @@ class Sion:
         )
         test_worker.start_playing.remote(True)
 
-        # Write everything in TensorBoard
         writer = SummaryWriter(self.config.log_dir)
 
         print(
-            "\nTraining...\nRun tensorboard --logdir ./results and go to http://localhost:6006/ to see in real time the training performance.\n"
+            "\nTraining...\nCorre el comando tensorboard --logdir ./results para ver el performance del training en tiempo real.\n"
         )
 
-        # Save hyperparameters to TensorBoard
         hp_table = [
             f"| {key} | {value} |" for key, value in self.config.__dict__.items()
         ]
@@ -172,8 +159,8 @@ class Sion:
         writer.add_text(
             "Model summary", self.summary,
         )
-        # Loop for updating the training performance
-        counter = 0
+
+        counter = self.checkpoint["counter"]
         keys = [
             "total_reward",
             "episode_length",
@@ -230,6 +217,9 @@ class Sion:
         except KeyboardInterrupt:
             pass
 
+        self.shared_storage_worker.set_info.remote("counter", counter)
+        self.shared_storage_worker.save_checkpoint.remote()
+
         self.terminate_workers()
 
         pickle.dump(
@@ -242,9 +232,6 @@ class Sion:
         )
 
     def terminate_workers(self):
-        """
-        Softly terminate the running tasks and garbage collect the workers.
-        """
         self.shared_storage_worker.set_info.remote("terminate", True)
         self.checkpoint = ray.get(self.shared_storage_worker.get_checkpoint.remote())
 
@@ -272,7 +259,7 @@ class Sion:
         for i in range(num_tests):
             print(f"Testing {i+1}/{num_tests}")
             results.append(ray.get(self_play_worker.play_game.remote(0)))
-        # self_play_worker.close_game.remote()
+        self_play_worker.close.remote()
 
         result = np.mean([sum(history.rewards) for history in results])
 

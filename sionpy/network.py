@@ -71,25 +71,19 @@ class SionNetwork:
             raise NotImplementedError()
 
 
-class MlpNetwork(nn.Module):
-    def __init__(
-        self,
-        input_size: int,
-        layer_sizes: List[int],
-        output_size: int,
-        output_activation=nn.Identity,
-        activation=nn.ELU,
-    ):
-        super(MlpNetwork, self).__init__()
-        sizes = [input_size] + layer_sizes + [output_size]
-        layers = []
-        for i in range(len(sizes) - 1):
-            act = activation if i < len(sizes) - 2 else output_activation
-            layers += [nn.Linear(sizes[i], sizes[i + 1]), act()]
-        self.network = nn.Sequential(*layers)
-
-    def forward(self, x: Tensor) -> Tensor:
-        return self.network.forward(x)
+def mlp(
+    input_size,
+    layer_sizes,
+    output_size,
+    output_activation=torch.nn.Identity,
+    activation=torch.nn.ReLU,
+):
+    sizes = [input_size] + layer_sizes + [output_size]
+    layers = []
+    for i in range(len(sizes) - 1):
+        act = activation if i < len(sizes) - 2 else output_activation
+        layers += [torch.nn.Linear(sizes[i], sizes[i + 1]), act()]
+    return torch.nn.Sequential(*layers)
 
 
 class SionFullyConnectedNetwork(AbstractNetwork):
@@ -98,7 +92,7 @@ class SionFullyConnectedNetwork(AbstractNetwork):
         self.action_space_size = len(config.action_space)
         self.full_support_size = 2 * config.support_size + 1
 
-        self.representation_network = MlpNetwork(
+        self.representation_network = mlp(
             config.observation_shape[0]
             * config.observation_shape[1]
             * config.observation_shape[2]
@@ -108,26 +102,35 @@ class SionFullyConnectedNetwork(AbstractNetwork):
             * config.observation_shape[2],
             config.fc_representation_layers,
             config.encoding_size,
+            activation=nn.Tanh,
         )
 
-        self.dynamics_state_network = MlpNetwork(
+        self.dynamics_state_network = mlp(
             config.encoding_size + self.action_space_size,
             config.fc_dynamics_layers,
             config.encoding_size,
+            activation=nn.Tanh,
         )
 
-        self.dynamics_reward_network = MlpNetwork(
+        self.dynamics_reward_network = mlp(
             config.encoding_size + self.action_space_size,
             config.fc_reward_layers,
             self.full_support_size,
+            activation=nn.LeakyReLU,
         )
 
-        self.prediction_policy_network = MlpNetwork(
-            config.encoding_size, config.fc_policy_layers, self.action_space_size
+        self.prediction_policy_network = mlp(
+            config.encoding_size,
+            config.fc_policy_layers,
+            self.action_space_size,
+            activation=nn.LeakyReLU,
         )
 
-        self.prediction_value_network = MlpNetwork(
-            config.encoding_size, config.fc_value_layers, self.full_support_size
+        self.prediction_value_network = mlp(
+            config.encoding_size,
+            config.fc_value_layers,
+            self.full_support_size,
+            activation=nn.LeakyReLU,
         )
 
     def prediction(self, hidden_state: Tensor) -> Tuple[Tensor, Tensor]:
